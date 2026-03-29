@@ -17,7 +17,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Rutas
-MOTOR_OCR_REPO = Path(r"C:\Users\Holbi\Documents\Freelance\proyectos\motor-OCR")
+# En servidor: D:\proyectos\motor-OCR
+# En laptop: C:\Users\Holbi\Documents\Freelance\proyectos\motor-OCR
+MOTOR_OCR_REPO = Path(r"D:\proyectos\motor-OCR")
 MOTOR_OCR_WRAPPER = MOTOR_OCR_REPO / "subprocess_wrapper.py"
 
 
