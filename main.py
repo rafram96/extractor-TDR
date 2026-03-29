@@ -21,7 +21,7 @@ logging.getLogger().addHandler(_console)
 logging.getLogger().addHandler(_file)
 
 # Silenciar librerías externas
-for _lib in ("pdfminer", "pdfplumber", "PIL", "openai", "httpx"):
+for _lib in ("pdfminer", "pdfplumber", "PIL", "openai", "httpx", "httpcore"):
     logging.getLogger(_lib).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)

@@ -93,8 +93,8 @@ def extraer_bases(
             # Re-parsear con el texto mejorado
             pages = parse_full_text(full_text)
             scored = [score_page(p) for p in pages]
-        except ImportError:
-            logger.warning("[pipeline] Módulo tables no disponible, saltando mejora de tablas")
+        except ImportError as e:
+            logger.warning(f"[pipeline] Módulo tables no disponible ({e}), saltando mejora de tablas")
         except Exception as e:
             logger.warning(f"[pipeline] Error en mejora de tablas: {e}")
 

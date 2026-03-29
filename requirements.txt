@@ -7,8 +7,8 @@ PyMuPDF>=1.24.0             # Extracción de imágenes de páginas PDF
 # Image processing
 Pillow>=10.0.0              # Manipulación de imágenes (crop de tablas)
 
-# Table detection (opcional — fallback a heurística si no está)
-# docling>=2.0.0            # Descomentar cuando esté instalado en servidor
+# Table detection
+docling>=2.0.0               # Detección de tablas (confirmación + bbox)
 
 # Excel generation
 openpyxl>=3.0.0

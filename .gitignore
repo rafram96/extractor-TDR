@@ -37,7 +37,7 @@ venv.bak/
 *.swo
 *~
 .DS_Store
-
+utils/
 # Project specific
 ocr_output/
 output/

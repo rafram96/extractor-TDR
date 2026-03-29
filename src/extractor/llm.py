@@ -29,9 +29,24 @@ def _get_client() -> OpenAI:
 
 
 def _limpiar_respuesta(raw: str) -> str:
-    """Limpia </think> y bloques markdown — mismo patrón que el motor OCR."""
+    """Limpia </think>, texto previo, y bloques markdown."""
+    # 1. Quitar bloque <think>...</think>
     if "</think>" in raw:
         raw = raw.split("</think>")[-1].strip()
+
+    # 2. Buscar bloque ```json ... ``` en CUALQUIER parte de la respuesta
+    #    (Qwen a veces mete "Basándome en..." antes del JSON)
+    import re
+    match = re.search(r"```(?:json)?\s*\n?(\{.*?})\s*```", raw, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+
+    # 3. Buscar el primer { ... } directo (sin bloque markdown)
+    brace_start = raw.find("{")
+    if brace_start > 0:
+        raw = raw[brace_start:]
+
+    # 4. Limpiar backticks sueltos
     raw = raw.strip("`").strip()
     if raw.startswith("json"):
         raw = raw[4:].strip()
