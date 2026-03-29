@@ -9,9 +9,6 @@ openpyxl>=3.0.0
 # OpenAI SDK (for Ollama compatibility)
 openai>=1.0.0
 
-# Logging
-python-dotenv>=1.0.0
-
 # Development
 pytest>=7.0.0
 pytest-cov>=4.0.0

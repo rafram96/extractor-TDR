@@ -4,18 +4,34 @@ import logging
 import sys
 from pathlib import Path
 
-from clients.motor_ocr_client import invoke_motor_ocr, check_motor_ocr_available
-from extractor.parser import parse_full_text
-from extractor.scorer import score_page, group_into_blocks
-from extractor.pipeline import extraer_bases
-from config.settings import OUTPUT_DIR
+# --- Logging: consola (INFO) + archivo (DEBUG) ---
+_log_fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_log_file = Path("extractor_tdr.log")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
+_console = logging.StreamHandler(sys.stdout)
+_console.setLevel(logging.INFO)
+_console.setFormatter(logging.Formatter(_log_fmt))
+
+_file = logging.FileHandler(_log_file, encoding="utf-8")
+_file.setLevel(logging.DEBUG)
+_file.setFormatter(logging.Formatter(_log_fmt))
+
+logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().addHandler(_console)
+logging.getLogger().addHandler(_file)
+
+# Silenciar librerías externas
+for _lib in ("pdfminer", "pdfplumber", "PIL", "openai", "httpx"):
+    logging.getLogger(_lib).setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
+logger.info(f"Logs guardados en: {_log_file.absolute()}")
+
+from src.clients.motor_ocr_client import invoke_motor_ocr, check_motor_ocr_available
+from src.extractor.parser import parse_full_text
+from src.extractor.scorer import score_page, group_into_blocks
+from src.extractor.pipeline import extraer_bases
+from src.config.settings import OUTPUT_DIR
 
 
 def cmd_extraer(args):
@@ -71,9 +87,15 @@ def main():
         "--dry-run", action="store_true",
         help="Solo muestra los bloques detectados sin llamar a Qwen"
     )
+    p_extraer.add_argument(
+        "--verbose", action="store_true",
+        help="Activa debug logging en consola"
+    )
 
     args = parser.parse_args()
     if args.comando == "extraer":
+        if getattr(args, "verbose", False):
+            _console.setLevel(logging.DEBUG)
         cmd_extraer(args)
     else:
         parser.print_help()

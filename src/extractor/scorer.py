@@ -4,9 +4,9 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
 
-from config.settings import SCORER_MIN_SCORE, SCORER_MAX_GAP, SCORER_CONTEXT
-from config.signals import SIGNALS
-from extractor.parser import PageResult
+from src.config.settings import SCORER_MIN_SCORE, SCORER_MAX_GAP, SCORER_CONTEXT
+from src.config.signals import SIGNALS
+from src.extractor.parser import PageResult
 
 
 def _strip_tildes(texto: str) -> str:

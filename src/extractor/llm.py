@@ -5,12 +5,12 @@ from typing import Optional
 
 from openai import OpenAI
 
-from config.settings import (
+from src.config.settings import (
     QWEN_OLLAMA_BASE_URL, QWEN_OLLAMA_API_KEY,
     QWEN_MODEL, QWEN_MAX_TOKENS, QWEN_TIMEOUT,
 )
-from config.signals import PROMPTS
-from extractor.scorer import Block
+from src.config.signals import PROMPTS
+from src.extractor.scorer import Block
 
 logger = logging.getLogger(__name__)
 

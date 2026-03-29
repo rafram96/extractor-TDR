@@ -1,9 +1,9 @@
 from __future__ import annotations
 import logging
 
-from extractor.parser import parse_full_text
-from extractor.scorer import score_page, group_into_blocks
-from extractor.llm import extraer_bloque
+from src.extractor.parser import parse_full_text
+from src.extractor.scorer import score_page, group_into_blocks
+from src.extractor.llm import extraer_bloque
 
 logger = logging.getLogger(__name__)
 
