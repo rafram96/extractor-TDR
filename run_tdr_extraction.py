@@ -50,7 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.tdr.excel_writer import TDRExcelWriter
 from src.tdr.markdown_processor import process_motor_ocr_output
-from src.tdr.motor_ocr_client import check_motor_ocr_available
+from src.clients.motor_ocr_client import check_motor_ocr_available
 from src.tdr.pdf_reader import read_pdf
 from src.tdr.tdr_extractor import TDRExtractor
 
