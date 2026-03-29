@@ -71,23 +71,35 @@ def invoke_motor_ocr(
 
     results_file = tempfile.mktemp(suffix=".pkl")
 
+    # Log file para capturar output del subprocess
+    log_file = Path("motor_ocr.log")
+
     try:
         python_exe = str(MOTOR_OCR_PYTHON) if MOTOR_OCR_PYTHON.exists() else sys.executable
         logger.info(f"[motor-OCR] Ejecutando wrapper: {MOTOR_OCR_WRAPPER}")
         logger.info(f"[motor-OCR] Python: {python_exe}")
-        result = subprocess.run(
-            [python_exe, str(MOTOR_OCR_WRAPPER), args_file, results_file],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        logger.info(f"[motor-OCR] Logs en: {log_file.absolute()}")
+
+        with open(log_file, "w") as logf:
+            result = subprocess.run(
+                [python_exe, str(MOTOR_OCR_WRAPPER), args_file, results_file],
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+
+        # Lee los últimos logs
+        with open(log_file, "r") as logf:
+            last_lines = logf.readlines()[-20:]
 
         if result.returncode != 0:
-            error_msg = result.stderr or result.stdout or "Error desconocido"
+            error_msg = "".join(last_lines) or "Error desconocido"
             logger.error(f"[motor-OCR] Fallo con código {result.returncode}")
-            logger.error(f"[motor-OCR] Stderr: {error_msg}")
+            logger.error(f"[motor-OCR] Últimos logs:\n{error_msg}")
             raise RuntimeError(f"motor-OCR falló: {error_msg}")
+
 
         # mode="ocr_only" retorna solo DocumentResult (no tupla)
         with open(results_file, "rb") as f:
