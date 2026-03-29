@@ -21,7 +21,8 @@ logging.getLogger().addHandler(_console)
 logging.getLogger().addHandler(_file)
 
 # Silenciar librerías externas
-for _lib in ("pdfminer", "pdfplumber", "PIL", "openai", "httpx", "httpcore"):
+for _lib in ("pdfminer", "pdfplumber", "PIL", "openai", "httpx", "httpcore",
+             "docling", "docling.pipeline"):
     logging.getLogger(_lib).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ def cmd_extraer(args):
         full_text,
         nombre_archivo=Path(args.pdf).name,
         pdf_path=pdf_path,
+        output_dir=OUTPUT_DIR,
     )
 
     out_path = OUTPUT_DIR / (Path(args.pdf).stem + "_bases.json")

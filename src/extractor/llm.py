@@ -53,17 +53,37 @@ def _limpiar_respuesta(raw: str) -> str:
     return raw
 
 
-def extraer_bloque(block: Block) -> Optional[dict]:
+def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
     """
-    Envía un bloque ya clasificado a Qwen y retorna el JSON extraído.
-    Retorna None si Qwen falla o devuelve JSON inválido.
+    Envía un bloque ya clasificado a Qwen y retorna el JSON extraído
+    junto con información diagnóstica de la interacción.
+
+    Returns:
+        (parsed_result_or_None, diagnostic_info_dict)
     """
+    diag = {
+        "block_type": block.block_type,
+        "page_range": list(block.page_range),
+        "pages_included": [p.page_num for p in block.pages],
+        "prompt_chars": 0,
+        "text_preview": block.text[:2000],
+        "raw_response": "",
+        "cleaned_response": "",
+        "parsed_ok": False,
+        "parsed_keys": [],
+        "items_extracted": 0,
+        "error": "",
+    }
+
     prompt_template = PROMPTS.get(block.block_type)
     if not prompt_template:
-        logger.warning(f"[llm] Sin prompt para tipo: {block.block_type}")
-        return None
+        diag["error"] = f"Sin prompt para tipo: {block.block_type}"
+        logger.warning(f"[llm] {diag['error']}")
+        return None, diag
 
     prompt = prompt_template.format(texto=block.text)
+    diag["prompt_chars"] = len(prompt)
+
     logger.info(
         f"[llm] Enviando bloque '{block.block_type}' "
         f"págs {block.page_range} ({len(prompt)} chars)"
@@ -78,11 +98,15 @@ def extraer_bloque(block: Block) -> Optional[dict]:
             max_tokens=QWEN_MAX_TOKENS,
         )
     except Exception as e:
-        logger.warning(f"[llm] Qwen falló: {e}")
-        return None
+        diag["error"] = f"Qwen falló: {e}"
+        logger.warning(f"[llm] {diag['error']}")
+        return None, diag
 
     raw = response.choices[0].message.content.strip()
+    diag["raw_response"] = raw
+
     raw = _limpiar_respuesta(raw)
+    diag["cleaned_response"] = raw
 
     try:
         result = json.loads(raw)
@@ -90,7 +114,19 @@ def extraer_bloque(block: Block) -> Optional[dict]:
             "block_type": block.block_type,
             "page_range": list(block.page_range),
         }
-        return result
+        diag["parsed_ok"] = True
+        diag["parsed_keys"] = [k for k in result.keys() if not k.startswith("_")]
+
+        # Contar items extraídos según tipo de bloque
+        if block.block_type == "rtm_postor":
+            diag["items_extracted"] = len(result.get("items_concurso", []))
+        elif block.block_type == "rtm_personal":
+            diag["items_extracted"] = len(result.get("personal_clave", []))
+        elif block.block_type == "factores_evaluacion":
+            diag["items_extracted"] = len(result.get("factores_evaluacion", []))
+
+        return result, diag
     except json.JSONDecodeError as e:
-        logger.warning(f"[llm] JSON inválido: {e} — raw: {raw[:200]!r}")
-        return None
+        diag["error"] = f"JSON inválido: {e} — raw: {raw[:200]!r}"
+        logger.warning(f"[llm] {diag['error']}")
+        return None, diag

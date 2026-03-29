@@ -1,10 +1,14 @@
 from __future__ import annotations
 import logging
+from pathlib import Path
 from typing import Any
 
 from src.extractor.parser import parse_full_text
 from src.extractor.scorer import score_page, group_into_blocks
 from src.extractor.llm import extraer_bloque
+from src.extractor.report import (
+    DiagnosticData, LLMInteraction, generar_reporte,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +64,7 @@ def extraer_bases(
     full_text: str,
     nombre_archivo: str = "",
     pdf_path: str = "",
+    output_dir: Path | None = None,
 ) -> dict:
     """
     Pipeline completo: full_text del motor OCR → JSON estructurado.
@@ -68,6 +73,7 @@ def extraer_bases(
         full_text: Texto completo del _texto_*.md
         nombre_archivo: Nombre del PDF (para metadatos)
         pdf_path: Ruta al PDF original (para mejora de tablas)
+        output_dir: Directorio de salida (para generar reporte diagnóstico)
 
     Returns:
         {
@@ -78,6 +84,9 @@ def extraer_bases(
             "_tablas_stats":       {...}   # estadísticas de mejora de tablas
         }
     """
+    # ── Inicializar datos de diagnóstico ──────────────────────────────────
+    diag = DiagnosticData(nombre_archivo=nombre_archivo)
+
     pages  = parse_full_text(full_text)
     scored = [score_page(p) for p in pages]
 
@@ -98,7 +107,21 @@ def extraer_bases(
         except Exception as e:
             logger.warning(f"[pipeline] Error en mejora de tablas: {e}")
 
+    # Guardar scores para diagnóstico
+    diag.all_scores = list(scored)
+
+    # Capturar datos de tablas si existen
+    if tablas_stats:
+        diag.tablas_paginas_heuristicas = getattr(
+            tablas_stats, "paginas_detectadas_heuristica", []
+        )
+        diag.tablas_docling_confirmadas = getattr(
+            tablas_stats, "paginas_confirmadas_docling", []
+        )
+        diag.tablas_detalles = getattr(tablas_stats, "detalles", [])
+
     blocks = group_into_blocks(scored)
+    diag.blocks = list(blocks)
 
     logger.info(f"[pipeline] {len(pages)} páginas → {len(blocks)} bloques")
     for b in blocks:
@@ -117,7 +140,24 @@ def extraer_bases(
             "tipo":    block.block_type,
             "paginas": list(block.page_range),
         })
-        data = extraer_bloque(block)
+
+        data, llm_diag = extraer_bloque(block)
+
+        # Registrar interacción LLM para diagnóstico
+        diag.llm_interactions.append(LLMInteraction(
+            block_type=llm_diag["block_type"],
+            page_range=tuple(llm_diag["page_range"]),
+            pages_included=llm_diag["pages_included"],
+            prompt_chars=llm_diag["prompt_chars"],
+            text_preview=llm_diag["text_preview"],
+            raw_response=llm_diag["raw_response"],
+            cleaned_response=llm_diag["cleaned_response"],
+            parsed_ok=llm_diag["parsed_ok"],
+            parsed_keys=llm_diag["parsed_keys"],
+            items_extracted=llm_diag["items_extracted"],
+            error=llm_diag["error"],
+        ))
+
         if not data:
             continue
         data = _limpiar_nulls(data)
@@ -142,4 +182,13 @@ def extraer_bases(
         f"{len(resultado['rtm_personal'])} profesionales · "
         f"{len(resultado['factores_evaluacion'])} factores"
     )
+
+    # ── Generar reporte de diagnóstico ────────────────────────────────────
+    diag.resultado = resultado
+    if output_dir:
+        try:
+            generar_reporte(diag, output_dir)
+        except Exception as e:
+            logger.warning(f"[pipeline] Error generando reporte diagnóstico: {e}")
+
     return resultado

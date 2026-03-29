@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.tables.detector import detectar_tabla
 from src.tables.docling_client import confirmar_tablas, check_docling_available, TablaDetectada
@@ -33,6 +33,10 @@ class EstadisticasTablas:
     tiempo_docling_s: float = 0.0
     tiempo_qwen_vl_s: float = 0.0
     tiempo_total_s: float = 0.0
+    # Diagnóstico por grupo de tablas procesado
+    paginas_detectadas_heuristica: list[int] = field(default_factory=list)
+    paginas_confirmadas_docling: list[int] = field(default_factory=list)
+    detalles: list[dict] = field(default_factory=list)
 
 
 def mejorar_texto_con_tablas(
@@ -82,6 +86,7 @@ def mejorar_texto_con_tablas(
             logger.debug(f"[enhancer] Pág {pag}: heurística={score:.2f} ✓")
 
     stats.paginas_heuristicas = len(paginas_con_tabla)
+    stats.paginas_detectadas_heuristica = list(paginas_con_tabla)
     stats.tiempo_heuristica_s = round(time.time() - t_heur, 2)
 
     if not paginas_con_tabla:
@@ -121,6 +126,7 @@ def mejorar_texto_con_tablas(
         tablas_confirmadas = confirmar_tablas(imagenes_para_docling)
 
     stats.tablas_docling = len(tablas_confirmadas)
+    stats.paginas_confirmadas_docling = [t.pagina for t in tablas_confirmadas]
     stats.tiempo_docling_s = round(time.time() - t_docling, 2)
 
     if not tablas_confirmadas:
@@ -175,6 +181,12 @@ def mejorar_texto_con_tablas(
                 f"[enhancer] Qwen VL falló para págs {paginas_grupo}"
             )
             stats.tablas_fallback += 1
+            stats.detalles.append({
+                "paginas": paginas_grupo,
+                "validado": False,
+                "razon": "QwenVL retornó None",
+                "preview": "",
+            })
             continue
 
         # Validar
@@ -185,9 +197,21 @@ def mejorar_texto_con_tablas(
                 f"{resultado.razon}"
             )
             stats.tablas_fallback += 1
+            stats.detalles.append({
+                "paginas": paginas_grupo,
+                "validado": False,
+                "razon": resultado.razon,
+                "preview": md_tabla[:300] if md_tabla else "",
+            })
             continue
 
         stats.tablas_validadas += 1
+        stats.detalles.append({
+            "paginas": paginas_grupo,
+            "validado": True,
+            "razon": "",
+            "preview": md_tabla[:300] if md_tabla else "",
+        })
 
         # Asignar el markdown a cada página del grupo
         # Para cross-page: el markdown completo va en la primera página,
