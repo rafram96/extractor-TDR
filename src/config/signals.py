@@ -83,38 +83,56 @@ PROMPT_RTM_PERSONAL = """
 Eres un extractor de datos de bases de concurso público peruano (OSCE).
 Responde SOLO con JSON válido, sin explicaciones. /no_think
 
-Analiza el siguiente texto y extrae los requisitos de PERSONAL CLAVE.
-No omitas ningún profesional. Si un profesional tiene múltiples requisitos,
-crea una fila por requisito.
+Analiza el siguiente texto de bases de concurso y extrae los requisitos de PERSONAL CLAVE.
+El texto puede tener DOS tablas relacionadas que debes combinar por cargo:
+
+TABLA 1 — Lista de cargos (sección "CALIFICACIONES DEL PERSONAL CLAVE" o similar):
+  Columnas: Ítem | Puesto/Cargo | Grado o Título Profesional | Cant.
+  → Da el nombre del cargo y las profesiones aceptadas.
+
+TABLA 2 — Experiencia requerida (sección "B.2 EXPERIENCIA DEL PERSONAL CLAVE" o similar):
+  Columnas: Ítem | Cargo | Formación académica | Experiencia (cargos válidos) | Tiempo de experiencia
+  → Da los meses requeridos, los cargos similares válidos, y la condición de colegiatura.
+  → "Tiempo de experiencia" indica los MESES exactos (ej: "48 meses", "36 meses", "24 meses").
+  → Puede decir "Computada desde la fecha de la colegiatura" — esto NO es años mínimos de colegiado,
+    sino que el conteo de experiencia se inicia desde la colegiatura.
+
+NOTA SOBRE TIPO DE OBRA: busca una nota al pie marcada con (*) que define las especialidades
+y subespecialidades válidas para la experiencia. Cópiala en "tipo_obra_valido".
+
+INSTRUCCIONES:
+- Si el texto tiene AMBAS tablas, combina la información por cargo (mismo ítem o mismo nombre).
+- Si solo hay una tabla, extrae lo que haya. NO inventes datos que no estén en el texto.
+- Si un campo genuinamente no aparece, usa null.
+- La unidad de experiencia es casi siempre "meses" en bases OSCE — verifica el texto.
+- No repitas el mismo cargo dos veces.
 
 TEXTO:
 {texto}
-
-Extrae esta estructura. Si un campo no aparece, usa null.
 
 {{
   "personal_clave": [
     {{
       "cargo": "nombre exacto del cargo",
       "profesiones_aceptadas": ["lista de profesiones válidas"],
-      "anos_colegiado": número entero o null,
+      "anos_colegiado": null,
       "experiencia_minima": {{
-        "cantidad": número,
+        "cantidad": número de meses o años (solo el número),
         "unidad": "meses" | "años" | "participaciones",
-        "descripcion": "descripción completa del requisito",
-        "cargos_similares_validos": ["lista de cargos similares aceptados"],
+        "descripcion": "transcripción literal del requisito de experiencia del cargo",
+        "cargos_similares_validos": ["lista de cargos similares aceptados según el documento"],
         "puntaje_por_experiencia": número o null,
         "puntaje_maximo": número o null
       }},
-      "tipo_obra_valido": "tipo de obra o servicio válido o null",
-      "tiempo_adicional_factores": "tiempo adicional en factores de evaluación o null",
+      "tipo_obra_valido": "especialidad y subespecialidades válidas según nota (*) o texto, o null",
+      "tiempo_adicional_factores": "tiempo adicional solicitado en factores de evaluación o null",
       "capacitacion": {{
-        "tema": "tema de la capacitación",
-        "tipo": "curso | diplomado | especialización | etc.",
+        "tema": "tema de capacitación requerida o null",
+        "tipo": "curso | diplomado | especialización | maestría | null",
         "duracion_minima_horas": número o null,
         "es_factor_evaluacion": true | false
       }},
-      "pagina": número de página donde aparece
+      "pagina": número de página donde aparece la información de experiencia
     }}
   ]
 }}
