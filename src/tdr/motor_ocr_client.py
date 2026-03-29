@@ -7,7 +7,6 @@ Más rápido (~50 min vs ~100 min para documentos grandes).
 
 import json
 import logging
-import pickle
 import subprocess
 import sys
 import tempfile
@@ -69,7 +68,7 @@ def invoke_motor_ocr(
         json.dump(args, f)
         args_file = f.name
 
-    results_file = tempfile.mktemp(suffix=".pkl")
+    results_file = tempfile.mktemp(suffix=".json")
 
     # Log file para capturar output del subprocess
     log_file = Path("motor_ocr.log")
@@ -101,20 +100,26 @@ def invoke_motor_ocr(
             raise RuntimeError(f"motor-OCR falló: {error_msg}")
 
 
-        # mode="ocr_only" retorna solo DocumentResult (no tupla)
-        with open(results_file, "rb") as f:
-            doc_result = pickle.load(f)
+        # mode="ocr_only" retorna JSON con DocumentResult
+        with open(results_file, "r", encoding="utf-8") as f:
+            result_data = json.load(f)
+
+        total_pages = result_data["total_pages"]
+        pages_paddle = result_data["pages_paddle"]
+        pages_qwen = result_data["pages_qwen"]
+        pages_error = result_data["pages_error"]
+        conf_promedio = result_data["conf_promedio_documento"]
+        tiempo_total = result_data["tiempo_total"]
+        full_text = result_data["full_text"]
 
         logger.info(
-            f"[motor-OCR] {doc_result.total_pages} páginas procesadas "
-            f"(Paddle: {doc_result.pages_paddle}, "
-            f"Qwen: {doc_result.pages_qwen}, "
-            f"Error: {doc_result.pages_error})"
+            f"[motor-OCR] {total_pages} páginas procesadas "
+            f"(Paddle: {pages_paddle}, "
+            f"Qwen: {pages_qwen}, "
+            f"Error: {pages_error})"
         )
-        logger.info(f"[motor-OCR] Confianza promedio: {doc_result.conf_promedio_documento:.3f}")
-        logger.info(f"[motor-OCR] Tiempo: {doc_result.tiempo_total:.1f}s")
-
-        full_text = doc_result.full_text
+        logger.info(f"[motor-OCR] Confianza promedio: {conf_promedio:.3f}")
+        logger.info(f"[motor-OCR] Tiempo: {tiempo_total:.1f}s")
 
         if not full_text or len(full_text.strip()) < 500:
             raise RuntimeError(
