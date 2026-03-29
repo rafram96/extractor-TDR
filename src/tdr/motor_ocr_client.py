@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # En laptop: C:\Users\Holbi\Documents\Freelance\proyectos\motor-OCR
 MOTOR_OCR_REPO = Path(r"D:\proyectos\motor-OCR")
 MOTOR_OCR_WRAPPER = MOTOR_OCR_REPO / "subprocess_wrapper.py"
+MOTOR_OCR_PYTHON = MOTOR_OCR_REPO / "venv" / "Scripts" / "python.exe"
 
 
 def invoke_motor_ocr(
@@ -71,9 +72,11 @@ def invoke_motor_ocr(
     results_file = tempfile.mktemp(suffix=".pkl")
 
     try:
+        python_exe = str(MOTOR_OCR_PYTHON) if MOTOR_OCR_PYTHON.exists() else sys.executable
         logger.info(f"[motor-OCR] Ejecutando wrapper: {MOTOR_OCR_WRAPPER}")
+        logger.info(f"[motor-OCR] Python: {python_exe}")
         result = subprocess.run(
-            [sys.executable, str(MOTOR_OCR_WRAPPER), args_file, results_file],
+            [python_exe, str(MOTOR_OCR_WRAPPER), args_file, results_file],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -124,5 +127,11 @@ def invoke_motor_ocr(
 
 
 def check_motor_ocr_available() -> bool:
-    """Verifica si motor-OCR está disponible."""
-    return MOTOR_OCR_WRAPPER.exists() and MOTOR_OCR_REPO.exists()
+    """Verifica si motor-OCR está disponible (repo + wrapper + venv)."""
+    available = MOTOR_OCR_WRAPPER.exists() and MOTOR_OCR_REPO.exists()
+    if available and not MOTOR_OCR_PYTHON.exists():
+        logger.warning(
+            f"[motor-OCR] venv no encontrado en {MOTOR_OCR_PYTHON}. "
+            "Se usará sys.executable como fallback."
+        )
+    return available
