@@ -92,7 +92,11 @@ def cmd_extraer(args):
         print(f"{'─'*50}\n")
         return
 
-    resultado = extraer_bases(full_text)
+    resultado = extraer_bases(
+        full_text,
+        nombre_archivo=Path(args.pdf).name,
+        pdf_path=pdf_path,
+    )
 
     out_path = OUTPUT_DIR / (Path(args.pdf).stem + "_bases.json")
     out_path.write_text(

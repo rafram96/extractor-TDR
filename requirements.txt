@@ -2,12 +2,20 @@
 
 # PDF processing
 pdfplumber>=0.11.0
+PyMuPDF>=1.24.0             # Extracción de imágenes de páginas PDF
+
+# Image processing
+Pillow>=10.0.0              # Manipulación de imágenes (crop de tablas)
+
+# Table detection (opcional — fallback a heurística si no está)
+# docling>=2.0.0            # Descomentar cuando esté instalado en servidor
 
 # Excel generation
 openpyxl>=3.0.0
 
-# OpenAI SDK (for Ollama compatibility)
-openai>=1.0.0
+# LLM clients
+openai>=1.0.0               # Ollama SDK compatibility (Qwen 14B)
+requests>=2.31.0            # Ollama API directa (Qwen VL)
 
 # Development
 pytest>=7.0.0

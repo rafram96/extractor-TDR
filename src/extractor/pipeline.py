@@ -56,20 +56,48 @@ def _dedup_personal(lista: list[dict]) -> list[dict]:
     return list(por_cargo.values())
 
 
-def extraer_bases(full_text: str) -> dict:
+def extraer_bases(
+    full_text: str,
+    nombre_archivo: str = "",
+    pdf_path: str = "",
+) -> dict:
     """
     Pipeline completo: full_text del motor OCR → JSON estructurado.
+
+    Args:
+        full_text: Texto completo del _texto_*.md
+        nombre_archivo: Nombre del PDF (para metadatos)
+        pdf_path: Ruta al PDF original (para mejora de tablas)
 
     Returns:
         {
             "rtm_postor":          [...],
             "rtm_personal":        [...],
             "factores_evaluacion": [...],
-            "_bloques_detectados": [...]   # trazabilidad
+            "_bloques_detectados": [...],
+            "_tablas_stats":       {...}   # estadísticas de mejora de tablas
         }
     """
     pages  = parse_full_text(full_text)
     scored = [score_page(p) for p in pages]
+
+    # ── Mejora de tablas (antes de agrupar bloques) ──────────────────────
+    tablas_stats = None
+    if pdf_path:
+        try:
+            from src.tables.enhancer import mejorar_texto_con_tablas
+            paginas_relevantes = [p.page_num for p in scored if p.dominant_type]
+            full_text, tablas_stats = mejorar_texto_con_tablas(
+                full_text, pdf_path, paginas_relevantes,
+            )
+            # Re-parsear con el texto mejorado
+            pages = parse_full_text(full_text)
+            scored = [score_page(p) for p in pages]
+        except ImportError:
+            logger.warning("[pipeline] Módulo tables no disponible, saltando mejora de tablas")
+        except Exception as e:
+            logger.warning(f"[pipeline] Error en mejora de tablas: {e}")
+
     blocks = group_into_blocks(scored)
 
     logger.info(f"[pipeline] {len(pages)} páginas → {len(blocks)} bloques")
@@ -81,6 +109,7 @@ def extraer_bases(full_text: str) -> dict:
         "rtm_personal":        [],
         "factores_evaluacion": [],
         "_bloques_detectados": [],
+        "_tablas_stats":       vars(tablas_stats) if tablas_stats else None,
     }
 
     for block in blocks:
@@ -94,7 +123,11 @@ def extraer_bases(full_text: str) -> dict:
         data = _limpiar_nulls(data)
 
         if block.block_type == "rtm_postor":
-            resultado["rtm_postor"].extend(data.get("items_concurso", []))
+            items = data.get("items_concurso", [])
+            for item in items:
+                if nombre_archivo:
+                    item["archivo"] = nombre_archivo
+            resultado["rtm_postor"].extend(items)
         elif block.block_type == "rtm_personal":
             resultado["rtm_personal"].extend(data.get("personal_clave", []))
         elif block.block_type == "factores_evaluacion":

@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c \"import pdfplumber; import openpyxl; import requests; print\\(''✓ Dependencias OK''\\)\")"
+      "Bash(python -c \"import pdfplumber; import openpyxl; import requests; print\\(''✓ Dependencias OK''\\)\")",
+      "Bash(grep -E \"\\\\.\\(py|txt|md|json\\)$\")",
+      "Bash(grep -r \"table\\\\|image\\\\|png\\\\|jpg\\\\|extract_table\" /c/Users/Holbi/Documents/Freelance/proyectos/extractor-Bases_TDR --include=*.py)"
     ]
   }
 }

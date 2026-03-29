@@ -56,24 +56,37 @@ PROMPT_RTM_POSTOR = """
 Eres un extractor de datos de bases de concurso público peruano (OSCE).
 Responde SOLO con JSON válido, sin explicaciones. /no_think
 
-Analiza el siguiente texto extraído de un documento de bases y extrae
-los requisitos de experiencia del POSTOR (empresa/consorcio).
+Analiza el siguiente texto de bases de concurso y extrae los requisitos de experiencia
+del POSTOR (empresa o consorcio). Solo extrae requisitos del POSTOR, no del personal clave.
+
+INSTRUCCIONES:
+- "tipo_experiencia_valida": el tipo de servicio u obra que debe acreditar el postor
+  (ej: "ELABORACIÓN DE EXPEDIENTES TÉCNICOS DE OBRAS").
+- "sector_valido": especialidad y subespecialidades válidas tal como aparecen en el texto.
+- "cita_exacta": copia textual del párrafo donde dice qué debe acreditar el postor.
+- "seccion": encabezado de sección donde aparece (ej: "3.4.1 Requisitos de Calificación
+  Obligatorios - A. Experiencia del Postor en la Especialidad").
+- "experiencia_adicional_factores": si en los FACTORES DE EVALUACIÓN se otorga puntaje
+  adicional al postor por superar la experiencia mínima, describe cómo. Si NO existe ese
+  factor adicional, escribe exactamente: "No aplica".
+- "otros_factores_postor": lista los factores de evaluación que aplican al POSTOR
+  (no al personal) con sus puntajes máximos, tal como aparecen en el texto. Si no hay,
+  escribe null.
 
 TEXTO:
 {texto}
-
-Extrae esta estructura. Si un campo no aparece, usa null.
 
 {{
   "items_concurso": [
     {{
       "item": "nombre o número del ítem, null si es único",
       "tipo_experiencia_valida": "descripción del tipo de obra/servicio válido",
-      "sector_valido": "sector (salud, educación, saneamiento, etc.) o null",
-      "cita_exacta": "transcripción literal del requisito de experiencia",
+      "sector_valido": "especialidad y subespecialidades válidas",
+      "cita_exacta": "transcripción literal del requisito de experiencia del postor",
+      "seccion": "encabezado de sección donde aparece el requisito",
       "pagina": número de página donde aparece,
-      "experiencia_adicional_factores": "experiencia adicional en factores de evaluación o null",
-      "otros_factores_postor": "otros factores de evaluación aplicables al postor o null"
+      "experiencia_adicional_factores": "descripción o 'No aplica'",
+      "otros_factores_postor": "lista de factores con puntajes o null"
     }}
   ]
 }}
@@ -83,29 +96,29 @@ PROMPT_RTM_PERSONAL = """
 Eres un extractor de datos de bases de concurso público peruano (OSCE).
 Responde SOLO con JSON válido, sin explicaciones. /no_think
 
-Analiza el siguiente texto de bases de concurso y extrae los requisitos de PERSONAL CLAVE.
-El texto puede tener DOS tablas relacionadas que debes combinar por cargo:
+ADVERTENCIA CRÍTICA — TABLAS OCR ENTRELAZADAS:
+El texto viene de OCR sobre PDF escaneado. Las tablas multi-columna aparecen con sus
+columnas ENTRELAZADAS, no fila por fila. Por ejemplo, para un cargo con 48 meses de
+experiencia, el texto puede aparecer así (columnas mezcladas):
 
-TABLA 1 — Lista de cargos (sección "CALIFICACIONES DEL PERSONAL CLAVE" o similar):
-  Columnas: Ítem | Puesto/Cargo | Grado o Título Profesional | Cant.
-  → Da el nombre del cargo y las profesiones aceptadas.
+  "Jefe y/o Gerente en elaboración de expedientes 48 meses en el Jefe de cargo elaboración
+   Título profesional Arquitecto desempeñado del expediente (Computada desde la técnico
+   fecha de la colegiatura)"
 
-TABLA 2 — Experiencia requerida (sección "B.2 EXPERIENCIA DEL PERSONAL CLAVE" o similar):
-  Columnas: Ítem | Cargo | Formación académica | Experiencia (cargos válidos) | Tiempo de experiencia
-  → Da los meses requeridos, los cargos similares válidos, y la condición de colegiatura.
-  → "Tiempo de experiencia" indica los MESES exactos (ej: "48 meses", "36 meses", "24 meses").
-  → Puede decir "Computada desde la fecha de la colegiatura" — esto NO es años mínimos de colegiado,
-    sino que el conteo de experiencia se inicia desde la colegiatura.
+Para extraer correctamente debes:
+1. Buscar el patrón EXACTO "N meses en el cargo desempeñado" — ese N es el tiempo requerido.
+2. El cargo que aparece MÁS CERCANO a ese patrón en el texto es el cargo asociado.
+3. Los cargos similares válidos son las frases "X y/o Y y/o Z" que aparecen antes del "N meses".
 
-NOTA SOBRE TIPO DE OBRA: busca una nota al pie marcada con (*) que define las especialidades
-y subespecialidades válidas para la experiencia. Cópiala en "tipo_obra_valido".
+ESTRUCTURA DEL DOCUMENTO:
+- Sección B.1 (o "CALIFICACIONES DEL PERSONAL CLAVE"): tabla con Ítem | Cargo | Título | Cant.
+  → Da el nombre del cargo y las profesiones aceptadas (títulos). SIN experiencia.
+- Sección B.2 (o "EXPERIENCIA DEL PERSONAL CLAVE"): tabla con Cargo | Formación | Experiencia | Tiempo
+  → Da los MESES exactos ("48 meses", "36 meses", "24 meses") y los cargos similares válidos.
+- Nota (*): define especialidad y subespecialidades válidas para la experiencia.
+  → Copia su contenido en "tipo_obra_valido".
 
-INSTRUCCIONES:
-- Si el texto tiene AMBAS tablas, combina la información por cargo (mismo ítem o mismo nombre).
-- Si solo hay una tabla, extrae lo que haya. NO inventes datos que no estén en el texto.
-- Si un campo genuinamente no aparece, usa null.
-- La unidad de experiencia es casi siempre "meses" en bases OSCE — verifica el texto.
-- No repitas el mismo cargo dos veces.
+REGLA: combina B.1 y B.2 por cargo. Si un campo no está en el texto, usa null. NO inventes.
 
 TEXTO:
 {texto}
@@ -113,26 +126,26 @@ TEXTO:
 {{
   "personal_clave": [
     {{
-      "cargo": "nombre exacto del cargo",
-      "profesiones_aceptadas": ["lista de profesiones válidas"],
+      "cargo": "nombre exacto del cargo según el documento",
+      "profesiones_aceptadas": ["lista de profesiones/títulos válidos"],
       "anos_colegiado": null,
       "experiencia_minima": {{
-        "cantidad": número de meses o años (solo el número),
-        "unidad": "meses" | "años" | "participaciones",
-        "descripcion": "transcripción literal del requisito de experiencia del cargo",
-        "cargos_similares_validos": ["lista de cargos similares aceptados según el documento"],
+        "cantidad": número entero de meses (busca patrón "N meses en el cargo"),
+        "unidad": "meses",
+        "descripcion": "transcripción del requisito de experiencia tal como aparece",
+        "cargos_similares_validos": ["cargos del tipo X y/o Y y/o Z que aparecen antes del N meses"],
         "puntaje_por_experiencia": número o null,
         "puntaje_maximo": número o null
       }},
-      "tipo_obra_valido": "especialidad y subespecialidades válidas según nota (*) o texto, o null",
-      "tiempo_adicional_factores": "tiempo adicional solicitado en factores de evaluación o null",
+      "tipo_obra_valido": "contenido de la nota (*) con especialidad y subespecialidades, o null",
+      "tiempo_adicional_factores": null,
       "capacitacion": {{
-        "tema": "tema de capacitación requerida o null",
-        "tipo": "curso | diplomado | especialización | maestría | null",
-        "duracion_minima_horas": número o null,
-        "es_factor_evaluacion": true | false
+        "tema": null,
+        "tipo": null,
+        "duracion_minima_horas": null,
+        "es_factor_evaluacion": false
       }},
-      "pagina": número de página donde aparece la información de experiencia
+      "pagina": número de página donde aparece la sección B.2 para este cargo
     }}
   ]
 }}
