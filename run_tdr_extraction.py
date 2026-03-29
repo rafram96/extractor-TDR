@@ -14,11 +14,25 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+# Setup logging a consola y archivo
+log_file = Path("extractor_tdr.log")
+
+# Handlers: consola + archivo
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+console_handler.setFormatter(console_formatter)
+
+file_handler = logging.FileHandler(log_file, encoding="utf-8")
+file_handler.setLevel(logging.DEBUG)  # Archivo captura todo
+file_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+file_handler.setFormatter(file_formatter)
+
+# Configurar root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+root_logger.addHandler(console_handler)
+root_logger.addHandler(file_handler)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +40,10 @@ logger = logging.getLogger(__name__)
 logging.getLogger("pdfminer").setLevel(logging.WARNING)
 logging.getLogger("pdfplumber").setLevel(logging.WARNING)
 logging.getLogger("PIL").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+logger.info(f"Logs guardados en: {log_file.absolute()}")
 
 # Agregar src al path
 sys.path.insert(0, str(Path(__file__).parent))

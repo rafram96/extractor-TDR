@@ -105,11 +105,14 @@ class TDRExtractor:
 
                 response = call_llm(prompt, max_retries=2)
 
+                # Log respuesta cruda para debug
+                logger.debug(f"[TDR Extractor] Respuesta LLM cruda: {json.dumps(response, indent=2, ensure_ascii=False)}")
+
                 # Parse response
                 cargos_data = response.get("cargos", [])
 
                 if not cargos_data:
-                    logger.warning("[TDR Extractor] LLM retornó lista vacía de cargos")
+                    logger.warning(f"[TDR Extractor] LLM retornó lista vacía de cargos. Response: {response}")
                     if intento < max_retries:
                         logger.info("[TDR Extractor] Reintentando...")
                         continue
