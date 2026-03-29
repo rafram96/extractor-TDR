@@ -22,6 +22,11 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Silenciar logs verbosos de librerías externas
+logging.getLogger("pdfminer").setLevel(logging.WARNING)
+logging.getLogger("pdfplumber").setLevel(logging.WARNING)
+logging.getLogger("PIL").setLevel(logging.WARNING)
+
 # Agregar src al path
 sys.path.insert(0, str(Path(__file__).parent))
 
