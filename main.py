@@ -34,16 +34,43 @@ from src.extractor.pipeline import extraer_bases
 from src.config.settings import OUTPUT_DIR
 
 
-def cmd_extraer(args):
-    if not check_motor_ocr_available():
-        logger.error("motor-OCR no disponible. Verificar rutas en config/settings.py")
-        sys.exit(1)
+def _leer_texto_existente(pdf_path: str) -> str | None:
+    """
+    Busca el _texto_*.md ya generado por motor-OCR para este PDF.
+    Retorna su contenido si existe, None si no.
+    """
+    pdf_stem = Path(pdf_path).stem
+    texto_dir = OUTPUT_DIR / pdf_stem
+    if not texto_dir.exists():
+        return None
+    archivos = sorted(texto_dir.glob("*_texto_*.md"))
+    if not archivos:
+        return None
+    texto_md = archivos[-1]
+    logger.info(f"[reuse-ocr] Usando texto existente: {texto_md}")
+    return texto_md.read_text(encoding="utf-8")
 
+
+def cmd_extraer(args):
     OUTPUT_DIR.mkdir(exist_ok=True)
     pdf_path = str(Path(args.pdf).absolute())
-
     logger.info(f"Procesando: {pdf_path}")
-    full_text = invoke_motor_ocr(pdf_path, output_dir=str(OUTPUT_DIR))
+
+    # --reuse-ocr: salta el OCR si el _texto_*.md ya existe
+    if getattr(args, "reuse_ocr", False):
+        full_text = _leer_texto_existente(pdf_path)
+        if full_text is None:
+            logger.error(
+                f"--reuse-ocr activo pero no se encontró _texto_*.md para "
+                f"'{Path(pdf_path).stem}' en {OUTPUT_DIR}. "
+                "Corre sin --reuse-ocr para generar el OCR primero."
+            )
+            sys.exit(1)
+    else:
+        if not check_motor_ocr_available():
+            logger.error("motor-OCR no disponible. Verificar rutas en config/settings.py")
+            sys.exit(1)
+        full_text = invoke_motor_ocr(pdf_path, output_dir=str(OUTPUT_DIR))
 
     if args.dry_run:
         # Muestra qué bloques detectaría sin llamar a Qwen
@@ -86,6 +113,10 @@ def main():
     p_extraer.add_argument(
         "--dry-run", action="store_true",
         help="Solo muestra los bloques detectados sin llamar a Qwen"
+    )
+    p_extraer.add_argument(
+        "--reuse-ocr", action="store_true",
+        help="Usa el _texto_*.md ya existente, salta el OCR (requiere haber corrido antes)"
     )
     p_extraer.add_argument(
         "--verbose", action="store_true",

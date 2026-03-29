@@ -110,7 +110,6 @@ def invoke_motor_ocr(
         pages_error = result_data["pages_error"]
         conf_promedio = result_data["conf_promedio_documento"]
         tiempo_total = result_data["tiempo_total"]
-        full_text = result_data["full_text"]
 
         logger.info(
             f"[motor-OCR] {total_pages} páginas procesadas "
@@ -121,7 +120,23 @@ def invoke_motor_ocr(
         logger.info(f"[motor-OCR] Confianza promedio: {conf_promedio:.3f}")
         logger.info(f"[motor-OCR] Tiempo: {tiempo_total:.1f}s")
 
-        if not full_text or len(full_text.strip()) < 500:
+        # El _texto_*.md tiene el formato markdown que espera el parser.
+        # result_data["full_text"] es texto plano — no sirve para el parser.
+        pdf_stem = Path(pdf_path).stem
+        texto_dir = Path(output_dir) / pdf_stem
+        texto_files = sorted(texto_dir.glob("*_texto_*.md"))
+
+        if not texto_files:
+            raise RuntimeError(
+                f"No se encontró _texto_*.md en {texto_dir}. "
+                "Verificar que motor-OCR generó el archivo."
+            )
+
+        texto_md = texto_files[-1]  # el más reciente si hubiera varios
+        full_text = texto_md.read_text(encoding="utf-8")
+        logger.info(f"[motor-OCR] Leyendo texto desde: {texto_md.name}")
+
+        if len(full_text.strip()) < 500:
             raise RuntimeError(
                 f"motor-OCR extrajo muy poco texto ({len(full_text)} chars). "
                 "Verificar calidad del PDF."
