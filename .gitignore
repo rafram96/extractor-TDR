@@ -39,7 +39,6 @@ venv.bak/
 .DS_Store
 
 # Project specific
-data/
 ocr_output/
 *.xlsx
 *.csv

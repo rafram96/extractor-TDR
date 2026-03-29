@@ -28,7 +28,7 @@ def read_pdf(
 
     Args:
         pdf_path: Ruta absoluta del PDF
-        output_dir: Directorio para motor-OCR output. Default: D:\proyectos\infoobras\ocr_output
+        output_dir: Directorio para motor-OCR output. Default: r"D:\proyectos\infoobras\ocr_output"
         min_chars_per_page: Umbral para decidir si es escaneado (default 200)
 
     Returns:
