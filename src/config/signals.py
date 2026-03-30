@@ -47,6 +47,17 @@ SIGNALS: dict[str, list[tuple[str, float]]] = {
         (r"perfeccionamiento del contrato",            2.0),
         (r"disposiciones comunes",                     2.0),
         (r"adelanto directo",                          1.5),
+        # ── Nuevas señales para reducir ruido ──
+        (r"declaraci[oó]n jurada",                     2.5),
+        (r"anexo n",                                   2.0),
+        (r"estructura de costos",                      3.0),
+        (r"precio de la oferta",                       2.5),
+        (r"promesa de consorcio",                      2.5),
+        (r"elecci[oó]n de instituci[oó]n arbitral",    2.5),
+        (r"constancia de capacidad",                   1.5),
+        (r"señores\s+evaluadores",                     1.5),
+        (r"presente\.?-",                              1.5),
+        (r"consignar seg[uú]n corresponda",            2.0),
     ],
 }
 
@@ -59,7 +70,14 @@ Responde SOLO con JSON válido, sin explicaciones. /no_think
 Analiza el siguiente texto de bases de concurso y extrae los requisitos de experiencia
 del POSTOR (empresa o consorcio). Solo extrae requisitos del POSTOR, no del personal clave.
 
-INSTRUCCIONES:
+REGLA CRÍTICA:
+- Si el texto NO contiene requisitos de experiencia del postor (secciones como "Experiencia
+  del Postor en la Especialidad", montos facturados, especialidades válidas), responde:
+  {{"items_concurso": []}}
+- NUNCA inventes datos, ejemplos ni plantillas. NO uses frases como "podría ser" o "ejemplo".
+- Solo extrae información que REALMENTE aparece en el texto proporcionado.
+
+INSTRUCCIONES (solo si encuentras requisitos reales):
 - "tipo_experiencia_valida": el tipo de servicio u obra que debe acreditar el postor
   (ej: "ELABORACIÓN DE EXPEDIENTES TÉCNICOS DE OBRAS").
 - "sector_valido": especialidad y subespecialidades válidas tal como aparecen en el texto.
@@ -96,7 +114,14 @@ PROMPT_RTM_PERSONAL = """
 Eres un extractor de datos de bases de concurso público peruano (OSCE).
 Responde SOLO con JSON válido, sin explicaciones. /no_think
 
-ADVERTENCIA CRÍTICA — TABLAS OCR ENTRELAZADAS:
+REGLA CRÍTICA:
+- Si el texto NO contiene una tabla o lista de personal clave con cargos, profesiones
+  y experiencia mínima, responde: {{"personal_clave": []}}
+- NUNCA inventes datos, ejemplos ni plantillas. NO uses frases como "podría ser" o "ejemplo".
+- Solo extrae información que REALMENTE aparece en el texto proporcionado.
+- Extrae TODOS los cargos que encuentres, no solo algunos.
+
+ADVERTENCIA — TABLAS OCR ENTRELAZADAS:
 El texto viene de OCR sobre PDF escaneado. Las tablas multi-columna aparecen con sus
 columnas ENTRELAZADAS, no fila por fila. Por ejemplo, para un cargo con 48 meses de
 experiencia, el texto puede aparecer así (columnas mezcladas):
@@ -106,9 +131,10 @@ experiencia, el texto puede aparecer así (columnas mezcladas):
    fecha de la colegiatura)"
 
 Para extraer correctamente debes:
-1. Buscar el patrón EXACTO "N meses en el cargo desempeñado" — ese N es el tiempo requerido.
+1. Buscar TODOS los patrones "N meses en el cargo" — cada uno corresponde a un profesional.
 2. El cargo que aparece MÁS CERCANO a ese patrón en el texto es el cargo asociado.
 3. Los cargos similares válidos son las frases "X y/o Y y/o Z" que aparecen antes del "N meses".
+4. Si ves "24 meses en el cargo desempeñado" repetido varias veces, cada uno es un cargo DIFERENTE.
 
 ESTRUCTURA DEL DOCUMENTO:
 - Sección B.1 (o "CALIFICACIONES DEL PERSONAL CLAVE"): tabla con Ítem | Cargo | Título | Cant.
@@ -157,6 +183,14 @@ Responde SOLO con JSON válido, sin explicaciones. /no_think
 
 Analiza el siguiente texto y extrae los factores de evaluación.
 Enfócate en puntajes, criterios y metodología de asignación.
+
+REGLA CRÍTICA:
+- Solo extrae factores que tengan un PUNTAJE MÁXIMO explícito (ej: "60 puntos", "5 puntos").
+- Si el texto NO contiene factores de evaluación con puntajes, responde:
+  {{"factores_evaluacion": []}}
+- NUNCA inventes datos, ejemplos ni plantillas.
+- Descripciones genéricas del proceso de evaluación (ej: "se aplica evaluación técnica")
+  NO son factores — solo extrae factores con puntajes concretos.
 
 TEXTO:
 {texto}

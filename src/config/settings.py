@@ -19,7 +19,7 @@ QWEN_VL_MODEL   = "qwen2.5vl:7b"
 QWEN_VL_TIMEOUT = 120   # segundos por imagen
 
 # ── Scorer ────────────────────────────────────────────────────────────────────
-SCORER_MIN_SCORE  = 2.0   # score mínimo para considerar una página relevante
+SCORER_MIN_SCORE  = 3.0   # score mínimo para considerar una página relevante
 SCORER_MAX_GAP    = 3     # páginas de gap toleradas dentro de un bloque
 SCORER_CONTEXT    = 1     # páginas de contexto antes/después de cada bloque
 

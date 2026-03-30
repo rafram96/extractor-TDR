@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 from typing import Optional
 
 from openai import OpenAI
@@ -51,6 +52,33 @@ def _limpiar_respuesta(raw: str) -> str:
     if raw.startswith("json"):
         raw = raw[4:].strip()
     return raw
+
+
+# Patrones que indican que el LLM fabricó datos en vez de extraerlos
+_FABRICATION_PATTERNS = [
+    r"\bejemplo\b",
+    r"\bplantilla\b",
+    r"\bpodría ser\b",
+    r"\basumiendo\b",
+    r"\bgenéric[oa]\b",
+    r"\bno se proporcion[aó]\b",
+    r"\bno se especific[aó]\b",
+    r"\bno se mencion[aó]\b",
+    r"\bpara completar\b",
+    r"\bnecesitar[ií]amos\b",
+    r"\bproporcion[ae]s? más detalles\b",
+    r"\bajust[aá][rd][oa]? según\b",
+    r"\bcargo similar [A-Z]\b",
+]
+
+
+def _es_respuesta_fabricada(raw_response: str) -> bool:
+    """Detecta si el LLM generó un 'ejemplo' en vez de extraer datos reales."""
+    texto = raw_response.lower()
+    for pattern in _FABRICATION_PATTERNS:
+        if re.search(pattern, texto, re.IGNORECASE):
+            return True
+    return False
 
 
 def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
@@ -104,6 +132,21 @@ def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
 
     raw = response.choices[0].message.content.strip()
     diag["raw_response"] = raw
+
+    # Detectar respuestas fabricadas ANTES de limpiar/parsear
+    if _es_respuesta_fabricada(raw):
+        diag["error"] = "Respuesta fabricada detectada (ejemplo/plantilla)"
+        logger.warning(
+            f"[llm] Bloque '{block.block_type}' págs {block.page_range}: "
+            f"respuesta fabricada descartada"
+        )
+        # Devolver resultado vacío según tipo
+        empty = {
+            "rtm_postor": {"items_concurso": []},
+            "rtm_personal": {"personal_clave": []},
+            "factores_evaluacion": {"factores_evaluacion": []},
+        }.get(block.block_type, {})
+        return empty, diag
 
     raw = _limpiar_respuesta(raw)
     diag["cleaned_response"] = raw

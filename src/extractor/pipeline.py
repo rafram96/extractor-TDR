@@ -4,13 +4,59 @@ from pathlib import Path
 from typing import Any
 
 from src.extractor.parser import parse_full_text
-from src.extractor.scorer import score_page, group_into_blocks
+from src.extractor.scorer import score_page, group_into_blocks, Block
 from src.extractor.llm import extraer_bloque
 from src.extractor.report import (
     DiagnosticData, LLMInteraction, generar_reporte,
 )
 
 logger = logging.getLogger(__name__)
+
+# Máximo de caracteres por bloque antes de subdividir
+_MAX_BLOCK_CHARS = 15_000
+_OVERLAP_PAGES = 1  # páginas de solapamiento entre sub-bloques
+
+
+def _subdividir_bloque(block: Block) -> list[Block]:
+    """
+    Si un bloque supera _MAX_BLOCK_CHARS, lo divide en sub-bloques
+    más pequeños con _OVERLAP_PAGES de solapamiento.
+    """
+    if len(block.text) <= _MAX_BLOCK_CHARS:
+        return [block]
+
+    sub_bloques = []
+    pages = block.pages
+    i = 0
+
+    while i < len(pages):
+        # Acumular páginas hasta llegar al límite
+        sub_pages = []
+        chars = 0
+        while i < len(pages) and (chars + len(pages[i].text)) <= _MAX_BLOCK_CHARS:
+            sub_pages.append(pages[i])
+            chars += len(pages[i].text)
+            i += 1
+
+        # Si no pudimos agregar ni una página (página individual > límite), agregarla sola
+        if not sub_pages and i < len(pages):
+            sub_pages.append(pages[i])
+            i += 1
+
+        if sub_pages:
+            sub_bloques.append(Block(block_type=block.block_type, pages=sub_pages))
+            # Retroceder para solapamiento
+            i -= _OVERLAP_PAGES
+
+    if sub_bloques:
+        n_pages = [len(sb.pages) for sb in sub_bloques]
+        logger.info(
+            f"[pipeline] Bloque '{block.block_type}' págs {block.page_range} "
+            f"({len(block.text)} chars) → {len(sub_bloques)} sub-bloques "
+            f"({n_pages} págs)"
+        )
+
+    return sub_bloques
 
 
 def _es_nulo(valor: Any) -> bool:
@@ -195,37 +241,41 @@ def extraer_bases(
             "paginas": list(block.page_range),
         })
 
-        data, llm_diag = extraer_bloque(block)
+        # Subdividir bloques grandes para que el LLM no pierda contexto
+        sub_blocks = _subdividir_bloque(block)
 
-        # Registrar interacción LLM para diagnóstico
-        diag.llm_interactions.append(LLMInteraction(
-            block_type=llm_diag["block_type"],
-            page_range=tuple(llm_diag["page_range"]),
-            pages_included=llm_diag["pages_included"],
-            prompt_chars=llm_diag["prompt_chars"],
-            text_preview=llm_diag["text_preview"],
-            raw_response=llm_diag["raw_response"],
-            cleaned_response=llm_diag["cleaned_response"],
-            parsed_ok=llm_diag["parsed_ok"],
-            parsed_keys=llm_diag["parsed_keys"],
-            items_extracted=llm_diag["items_extracted"],
-            error=llm_diag["error"],
-        ))
+        for sub_block in sub_blocks:
+            data, llm_diag = extraer_bloque(sub_block)
 
-        if not data:
-            continue
-        data = _limpiar_nulls(data)
+            # Registrar interacción LLM para diagnóstico
+            diag.llm_interactions.append(LLMInteraction(
+                block_type=llm_diag["block_type"],
+                page_range=tuple(llm_diag["page_range"]),
+                pages_included=llm_diag["pages_included"],
+                prompt_chars=llm_diag["prompt_chars"],
+                text_preview=llm_diag["text_preview"],
+                raw_response=llm_diag["raw_response"],
+                cleaned_response=llm_diag["cleaned_response"],
+                parsed_ok=llm_diag["parsed_ok"],
+                parsed_keys=llm_diag["parsed_keys"],
+                items_extracted=llm_diag["items_extracted"],
+                error=llm_diag["error"],
+            ))
 
-        if block.block_type == "rtm_postor":
-            items = data.get("items_concurso", [])
-            for item in items:
-                if nombre_archivo:
-                    item["archivo"] = nombre_archivo
-            resultado["rtm_postor"].extend(items)
-        elif block.block_type == "rtm_personal":
-            resultado["rtm_personal"].extend(data.get("personal_clave", []))
-        elif block.block_type == "factores_evaluacion":
-            resultado["factores_evaluacion"].extend(data.get("factores_evaluacion", []))
+            if not data:
+                continue
+            data = _limpiar_nulls(data)
+
+            if block.block_type == "rtm_postor":
+                items = data.get("items_concurso", [])
+                for item in items:
+                    if nombre_archivo:
+                        item["archivo"] = nombre_archivo
+                resultado["rtm_postor"].extend(items)
+            elif block.block_type == "rtm_personal":
+                resultado["rtm_personal"].extend(data.get("personal_clave", []))
+            elif block.block_type == "factores_evaluacion":
+                resultado["factores_evaluacion"].extend(data.get("factores_evaluacion", []))
 
     # Post-proceso: deduplicar personal y limpiar entradas vacías
     resultado["rtm_personal"] = _dedup_personal(resultado["rtm_personal"])
