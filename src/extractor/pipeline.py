@@ -252,9 +252,27 @@ def _normalizar_cargo(cargo: str) -> str:
         → "gestor bim"
       "Especialista en Arquitectura"
         → "especialista en arquitectura"
+      "Especialista en desarrollo y/o elaboración y/o ... en la especialidad de Estructuras"
+        → "especialista en estructuras"
+      "Especialista en desarrollo y/o ... en la especialidad de Instalaciones Eléctricas"
+        → "especialista en instalaciones eléctricas"
     """
+    texto = cargo.strip()
+
+    # 0. Caso especial: cargos con "en la especialidad de X"
+    #    El LLM a veces genera cargos largos tipo:
+    #    "Especialista en desarrollo y/o elaboración y/o supervisión y/o
+    #     diseño en la especialidad de Instalaciones Eléctricas"
+    #    La identidad real del cargo es la especialidad final.
+    m_esp = re.search(
+        r"especialidad\s+de\s+(.+)$", texto, re.IGNORECASE,
+    )
+    if m_esp:
+        especialidad = m_esp.group(1).strip().lower()
+        return f"especialista en {especialidad}"
+
     # 1. Tomar primera alternativa de "X y/o Y y/o Z"
-    base = re.split(r"\s+y/o\s+", cargo.strip(), maxsplit=1)[0].strip()
+    base = re.split(r"\s+y/o\s+", texto, maxsplit=1)[0].strip()
 
     # 2. Quitar frases de acción tras el cargo base:
     #    "de elaboración del expediente técnico" → ""
