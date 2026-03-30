@@ -23,12 +23,12 @@ def _comprimir_tabla_vl(text: str, max_chars: int = 4000) -> str:
     """
     Comprime tablas markdown grandes generadas por Qwen VL.
 
-    Las tablas VL incluyen columnas de "Descripción de actividades mínimas"
-    que ocupan miles de chars pero no son relevantes para la extracción de
-    requisitos (cargo, profesión, experiencia, colegiatura, capacitación).
+    Qwen VL a veces genera dos tablas en una misma página:
+      1. Tabla resumen (B.1): Item | Cargo | Profesión | Cant. — celdas cortas, útil
+      2. Tabla de descripciones: Cargo | Descripción de actividades — celdas de 500+ chars
 
-    Estrategia: si la página tiene una tabla markdown > max_chars,
-    elimina las columnas no esenciales y conserva solo las de identificación.
+    Estrategia: eliminar filas donde ALGUNA celda excede 200 chars
+    (son filas de descripción de actividades, no de requisitos).
     """
     if len(text) <= max_chars:
         return text
@@ -39,16 +39,10 @@ def _comprimir_tabla_vl(text: str, max_chars: int = 4000) -> str:
     if len(lineas_tabla) < 3:
         return text  # No es una tabla significativa
 
-    # Columnas a conservar (por contenido del encabezado)
-    _COLS_ESENCIALES = {
-        "item", "ítem", "cargo", "puesto", "denominación", "denominacion",
-        "profesión", "profesion", "grado", "título", "titulo", "cant",
-        "cantidad", "formación", "formacion", "experiencia", "tiempo",
-        "colegiatura", "colegiado", "capacitación", "capacitacion",
-    }
+    _MAX_CELDA = 200  # celdas de resumen son <100 chars, descripciones >500
 
     resultado = []
-    indices_esenciales = None
+    filas_eliminadas = 0
 
     for linea in lineas:
         if "|" not in linea or not linea.strip().startswith("|"):
@@ -56,39 +50,22 @@ def _comprimir_tabla_vl(text: str, max_chars: int = 4000) -> str:
             continue
 
         celdas = [c.strip() for c in linea.split("|")]
+        max_celda = max((len(c) for c in celdas), default=0)
 
-        # Primera fila con texto = encabezado → determinar qué columnas conservar
-        if indices_esenciales is None:
-            indices_esenciales = []
-            for i, celda in enumerate(celdas):
-                celda_lower = celda.lower().strip(" -")
-                if not celda_lower:
-                    indices_esenciales.append(i)  # Conservar columnas vacías (bordes)
-                    continue
-                # ¿Es columna esencial?
-                if any(kw in celda_lower for kw in _COLS_ESENCIALES):
-                    indices_esenciales.append(i)
-                # Si es separador (---), conservar también
-                elif re.match(r"^-+$", celda_lower):
-                    indices_esenciales.append(i)
+        if max_celda > _MAX_CELDA:
+            filas_eliminadas += 1
+            continue  # Saltar filas con descripciones enormes
 
-            # Si no identificamos columnas (tabla sin encabezado claro), conservar todo
-            if len(indices_esenciales) <= 2:
-                return text
-
-        # Filtrar solo columnas esenciales
-        celdas_filtradas = [
-            celdas[i] if i < len(celdas) else ""
-            for i in indices_esenciales
-        ]
-        resultado.append("| " + " | ".join(celdas_filtradas) + " |")
+        resultado.append(linea)
 
     texto_comprimido = "\n".join(resultado)
-    if len(texto_comprimido) < len(text):
+
+    if filas_eliminadas > 0:
         ahorro = len(text) - len(texto_comprimido)
         logger.info(
             f"[pipeline] Tabla VL comprimida: {len(text)} → {len(texto_comprimido)} chars "
-            f"(−{ahorro} chars, {ahorro*100//len(text)}% reducción)"
+            f"(−{ahorro}, {ahorro*100//len(text)}% reducción, "
+            f"{filas_eliminadas} filas de descripción eliminadas)"
         )
     return texto_comprimido
 
