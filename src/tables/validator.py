@@ -77,12 +77,14 @@ def validar_tabla_markdown(md: str, min_score: float = 0.5) -> ResultadoValidaci
         varianza = max(col_counts) - min(col_counts)
 
     # ── Rechazos duros ───────────────────────────────────────────────────
-    # Varianza > 3 en columnas: tabla rota (columnas completamente inconsistentes)
-    if varianza > 3:
+    # Tablas grandes (≥8 filas) toleran más varianza: fusión de celdas en OCR
+    # es frecuente pero no invalida las demás filas.
+    max_varianza = 5 if len(data_counts) >= 8 else 3
+    if varianza > max_varianza:
         return ResultadoValidacion(
             valido=False, score=0.1,
             num_filas=len(lineas), num_columnas=max_cols - 1,
-            razon=f"Columnas inconsistentes (varianza={varianza}, max tolerable=3)"
+            razon=f"Columnas inconsistentes (varianza={varianza}, max tolerable={max_varianza})"
         )
 
     # Densidad mínima: menos de 4 chars por fila → respuesta vacía/garbage

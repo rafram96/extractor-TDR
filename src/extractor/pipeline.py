@@ -279,15 +279,15 @@ def _extraer_numero_de_string(s: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _merge_deep(base: dict, nuevo: dict) -> dict:
+def _merge_deep(base: dict, nuevo: dict, base_es_vl: bool = False) -> dict:
     """
     Fusiona dos dicts: campos no-nulos de 'nuevo' rellenan los nulos de 'base'.
     Para sub-dicts (experiencia_minima, capacitacion), fusiona recursivamente.
     Para listas, conserva la más larga.
     Para strings, si ambos son no-nulos conserva el más largo (más informativo).
-    Para numéricos, conserva el mayor (en licitaciones, el requisito mínimo
-    real nunca es menor al encontrado — si un bloque garbled dice 24 y el
-    bloque VL limpio dice 48, el correcto es 48).
+    Para numéricos, conserva el mayor — EXCEPTO cuando base proviene de una
+    tabla VL validada (base_es_vl=True): en ese caso se confía en el valor
+    de la tabla limpia y no se sobreescribe con el OCR fragmentado.
     """
     resultado = dict(base)
     for k, v in nuevo.items():
@@ -295,7 +295,7 @@ def _merge_deep(base: dict, nuevo: dict) -> dict:
             continue
         base_v = resultado.get(k)
         if isinstance(base_v, dict) and isinstance(v, dict):
-            resultado[k] = _merge_deep(base_v, v)
+            resultado[k] = _merge_deep(base_v, v, base_es_vl)
         elif isinstance(base_v, list) and isinstance(v, list):
             if len(v) > len(base_v):
                 resultado[k] = v
@@ -303,20 +303,18 @@ def _merge_deep(base: dict, nuevo: dict) -> dict:
             resultado[k] = v
         elif (isinstance(base_v, (int, float)) and isinstance(v, (int, float))
               and not _es_nulo(base_v) and not _es_nulo(v)):
-            # Preferir el valor mayor (requisitos mínimos en licitaciones)
-            if v > base_v:
+            # Si base es VL, sus valores numéricos son los correctos — no sobreescribir
+            if not base_es_vl and v > base_v:
                 resultado[k] = v
         elif (isinstance(base_v, str) and isinstance(v, str)
               and not _es_nulo(base_v) and not _es_nulo(v)):
-            # Para strings con cantidades numéricas ("48 meses" vs "24 meses"),
-            # preferir el valor mayor (requisito mínimo real)
             num_base = _extraer_numero_de_string(base_v)
             num_nuevo = _extraer_numero_de_string(v)
             if num_base is not None and num_nuevo is not None:
-                if num_nuevo > num_base:
+                # Si base es VL, respetar su número aunque sea menor
+                if not base_es_vl and num_nuevo > num_base:
                     resultado[k] = v
             elif len(v) > len(base_v):
-                # Preferir string más largo (más informativo)
                 resultado[k] = v
     return resultado
 
@@ -377,6 +375,10 @@ def _dedup_personal(lista: list[dict]) -> list[dict]:
     Cuando hay dos entradas del mismo cargo (ej. "Gestor BIM" y
     "Gestor BIM y/o líder BIM..."), combina sus campos:
     los no-nulos de cada entrada se complementan mutuamente.
+
+    Prioridad VL: si una entrada viene de un sub-bloque VL (tabla validada
+    visualmente), se usa como base en el merge para que sus valores numéricos
+    exactos no sean sobreescritos por el OCR fragmentado.
     """
     por_cargo: dict[str, dict] = {}
     for entrada in lista:
@@ -385,15 +387,28 @@ def _dedup_personal(lista: list[dict]) -> list[dict]:
             continue
 
         cargo_key = _normalizar_cargo(str(cargo))
+        es_vl = bool(entrada.get("_vl_source"))
+
         if cargo_key not in por_cargo:
             por_cargo[cargo_key] = entrada
         else:
-            por_cargo[cargo_key] = _merge_deep(por_cargo[cargo_key], entrada)
-            logger.debug(
-                f"[dedup] Fusionado cargo '{cargo}' → key '{cargo_key}'"
-            )
+            existente = por_cargo[cargo_key]
+            existente_es_vl = bool(existente.get("_vl_source"))
 
-    return list(por_cargo.values())
+            if es_vl and not existente_es_vl:
+                # Nueva entrada es VL: usarla como base (sus valores son correctos)
+                por_cargo[cargo_key] = _merge_deep(entrada, existente, base_es_vl=True)
+                logger.debug(f"[dedup] Fusionado '{cargo}' → '{cargo_key}' (VL base)")
+            else:
+                por_cargo[cargo_key] = _merge_deep(existente, entrada, base_es_vl=existente_es_vl)
+                logger.debug(f"[dedup] Fusionado '{cargo}' → '{cargo_key}'")
+
+    # Quitar campo interno _vl_source antes de devolver
+    resultado = []
+    for entrada in por_cargo.values():
+        entrada.pop("_vl_source", None)
+        resultado.append(entrada)
+    return resultado
 
 
 def _extraer_especialidad(cargo: str) -> str | None:
@@ -481,6 +496,86 @@ def _filtrar_asistentes(lista: list[dict]) -> list[dict]:
             f"(sección TDR, no personal clave)"
         )
     return resultado
+
+
+def _similarity_cargo(a: str, b: str) -> float:
+    """Overlap de palabras entre dos strings de cargo normalizados."""
+    words_a = set(a.split())
+    words_b = set(b.split())
+    if not words_a or not words_b:
+        return 0.0
+    return len(words_a & words_b) / max(len(words_a), len(words_b))
+
+
+def _cruzar_personal_con_factores(
+    personal: list[dict],
+    factores: list[dict],
+) -> list[dict]:
+    """
+    Popula tiempo_adicional_factores en cada cargo de rtm_personal buscando
+    si existe un factor de evaluación de experiencia que lo mencione.
+    """
+    factores_personal = [
+        f for f in factores
+        if f.get("aplica_a") == "personal" and not _es_nulo(f.get("cargo_personal"))
+    ]
+    if not factores_personal:
+        return personal
+
+    for cargo_entry in personal:
+        cargo = cargo_entry.get("cargo")
+        if _es_nulo(cargo) or not _es_nulo(cargo_entry.get("tiempo_adicional_factores")):
+            continue
+        cargo_norm = _normalizar_cargo(str(cargo))
+
+        for factor in factores_personal:
+            cargo_factor_norm = _normalizar_cargo(str(factor.get("cargo_personal", "")))
+            if (cargo_norm == cargo_factor_norm
+                    or cargo_norm in cargo_factor_norm
+                    or cargo_factor_norm in cargo_norm
+                    or _similarity_cargo(cargo_norm, cargo_factor_norm) >= 0.6):
+                puntaje = factor.get("puntaje_maximo")
+                metodologia = factor.get("metodologia", "")
+                cargo_entry["tiempo_adicional_factores"] = (
+                    metodologia[:300] if metodologia
+                    else (f"Hasta {puntaje} puntos" if puntaje else "Sí evalúa")
+                )
+                logger.debug(
+                    f"[cruce] '{cargo}' → factor '{factor.get('factor')}'"
+                )
+                break
+
+    return personal
+
+
+def _cruzar_postor_con_factores(
+    postor: list[dict],
+    factores: list[dict],
+) -> list[dict]:
+    """
+    Popula otros_factores_postor en rtm_postor con los factores de evaluación
+    que aplican al postor (excluye oferta económica).
+    """
+    factores_postor = [
+        f for f in factores
+        if f.get("aplica_a") == "postor"
+        and not re.search(
+            r"oferta econ[oó]mica|propuesta econ[oó]mica",
+            str(f.get("factor", "")), re.IGNORECASE,
+        )
+    ]
+    if not postor or not factores_postor:
+        return postor
+
+    factores_text = "; ".join(
+        f"{f.get('factor', '')} ({f.get('puntaje_maximo', '')} pts)"
+        for f in factores_postor
+    )
+    for entry in postor:
+        if _es_nulo(entry.get("otros_factores_postor")):
+            entry["otros_factores_postor"] = factores_text
+
+    return postor
 
 
 def _guardar_debug_bloques(
@@ -664,10 +759,19 @@ def extraer_bases(
         sub_blocks = _subdividir_bloque(block)
 
         for i_sub, sub_block in enumerate(sub_blocks, 1):
+            # Detectar si este sub-bloque es una tabla VL validada (página única
+            # con markdown estructurado). Sus valores numéricos son más fiables
+            # que el OCR fragmentado y no deben ser sobreescritos en el merge.
+            es_sub_vl = (
+                len(sub_block.pages) == 1
+                and _es_pagina_tabla_vl(sub_block.pages[0].text)
+            )
+
             if len(sub_blocks) > 1:
+                tag_vl = " [VL]" if es_sub_vl else ""
                 logger.info(
                     f"[pipeline]   Sub-bloque {i_sub}/{len(sub_blocks)} "
-                    f"págs {sub_block.page_range} ({len(sub_block.text)} chars)"
+                    f"págs {sub_block.page_range} ({len(sub_block.text)} chars){tag_vl}"
                 )
             t_bloque = time.perf_counter()
             data, llm_diag = extraer_bloque(sub_block)
@@ -703,7 +807,11 @@ def extraer_bases(
                         item["archivo"] = nombre_archivo
                 resultado["rtm_postor"].extend(items)
             elif block.block_type == "rtm_personal":
-                resultado["rtm_personal"].extend(data.get("personal_clave", []))
+                items = data.get("personal_clave", [])
+                if es_sub_vl:
+                    for item in items:
+                        item["_vl_source"] = True
+                resultado["rtm_personal"].extend(items)
             elif block.block_type == "factores_evaluacion":
                 resultado["factores_evaluacion"].extend(data.get("factores_evaluacion", []))
 
@@ -711,11 +819,12 @@ def extraer_bases(
     resultado["rtm_personal"] = _dedup_personal(resultado["rtm_personal"])
 
     # Filtrar "Asistentes" espurios cuando existe un "Especialista" equivalente.
-    # Páginas de TDR/Anexo (ej: 36-42) generan roles de soporte ("Asistente de
-    # Arquitectura") que no son personal clave del concurso. Si existe un
-    # "Especialista en Arquitectura" de la sección de calificación, el Asistente
-    # es redundante.
     resultado["rtm_personal"] = _filtrar_asistentes(resultado["rtm_personal"])
+
+    # Cruce personal ↔ factores: popula tiempo_adicional_factores
+    resultado["rtm_personal"] = _cruzar_personal_con_factores(
+        resultado["rtm_personal"], resultado["factores_evaluacion"],
+    )
 
     # Validación final: eliminar registros con ≥80% de campos nulos
     resultado["rtm_postor"] = _filtrar_registros_vacios(
@@ -726,6 +835,11 @@ def extraer_bases(
     )
     resultado["factores_evaluacion"] = _filtrar_registros_vacios(
         resultado["factores_evaluacion"], "factores_evaluacion",
+    )
+
+    # Cruce postor ↔ factores: popula otros_factores_postor
+    resultado["rtm_postor"] = _cruzar_postor_con_factores(
+        resultado["rtm_postor"], resultado["factores_evaluacion"],
     )
 
     dt_llm_total = time.perf_counter() - t_llm_total

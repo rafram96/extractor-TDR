@@ -3,7 +3,10 @@
     "allow": [
       "Bash(python -c \"import pdfplumber; import openpyxl; import requests; print\\(''✓ Dependencias OK''\\)\")",
       "Bash(grep -E \"\\\\.\\(py|txt|md|json\\)$\")",
-      "Bash(grep -r \"table\\\\|image\\\\|png\\\\|jpg\\\\|extract_table\" /c/Users/Holbi/Documents/Freelance/proyectos/extractor-Bases_TDR --include=*.py)"
+      "Bash(grep -r \"table\\\\|image\\\\|png\\\\|jpg\\\\|extract_table\" /c/Users/Holbi/Documents/Freelance/proyectos/extractor-Bases_TDR --include=*.py)",
+      "Bash(ls \"C:\\\\Users\\\\Holbi\\\\.claude\\\\projects\\\\C--Users-Holbi-Documents-Freelance-proyectos-InfoObras-extractor-Bases-TDR\\\\memory\"\" 2>/dev/null || echo \"EMPTY \")",
+      "Bash(source venv/Scripts/activate)",
+      "Bash(python -c \"from src.extractor.pipeline import extraer_bases; from src.tables.validator import validar_tabla_markdown; print\\(''OK''\\)\")"
     ]
   }
 }
