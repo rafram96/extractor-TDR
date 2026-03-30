@@ -234,4 +234,104 @@ else:
         "El proceso principal continúa — puede haber contención de VRAM."
     )
 
+# ── Pre-cargar Qwen 14B en GPU antes de devolver control al proceso principal ──
+# Ollama puede retener pools CUDA internos incluso tras descargar VL.
+# Si 14B se carga inmediatamente, Ollama a veces lo manda a RAM.
+# Forzamos la carga aquí con num_gpu=99 y verificamos que size_vram > 0
+# para garantizar que está en GPU, no en RAM/disco.
+
+# Pausa para que CUDA libere los pools internos del modelo VL
+time.sleep(5)
+logger.info("Pausa de 5s para liberar pools CUDA completada")
+
+_qwen_model = settings.get("QWEN_MODEL", "qwen2.5:14b")
+_max_intentos = 3
+
+for _intento in range(1, _max_intentos + 1):
+    try:
+        logger.info(
+            f"Pre-cargando '{_qwen_model}' en GPU (intento {_intento}/{_max_intentos})..."
+        )
+        # Prompt vacío = solo cargar modelo, sin generar tokens
+        resp_warm = _req.post(
+            f"{_ollama_url}/api/generate",
+            json={
+                "model": _qwen_model,
+                "prompt": "",
+                "keep_alive": "10m",
+                "options": {"num_gpu": 99},
+            },
+            timeout=120,
+        )
+        resp_warm.raise_for_status()
+
+        # Verificar que 14B está en VRAM (no en RAM)
+        # Polleamos /api/ps hasta que el modelo aparezca. Si aparece en GPU → OK.
+        # Si aparece en RAM → salir inmediatamente y reintentar (no va a migrar solo).
+        _warm_timeout = 60.0
+        _warm_elapsed = 0.0
+        _en_gpu = False
+        _en_ram = False
+        while _warm_elapsed < _warm_timeout:
+            time.sleep(2)
+            _warm_elapsed += 2
+            try:
+                resp_ps = _req.get(f"{_ollama_url}/api/ps", timeout=5)
+                for m in resp_ps.json().get("models", []):
+                    if _qwen_model in m.get("name", ""):
+                        size_total = m.get("size", 0)
+                        size_vram = m.get("size_vram", 0)
+                        pct_gpu = (size_vram / size_total * 100) if size_total > 0 else 0
+
+                        if size_vram > 0 and pct_gpu > 90:
+                            logger.info(
+                                f"'{_qwen_model}' confirmado en GPU: "
+                                f"{size_vram / 1e9:.1f}GB VRAM / "
+                                f"{size_total / 1e9:.1f}GB total "
+                                f"({pct_gpu:.0f}%) — listo"
+                            )
+                            _en_gpu = True
+                        else:
+                            logger.warning(
+                                f"'{_qwen_model}' cargado pero en RAM: "
+                                f"{size_vram / 1e9:.1f}GB VRAM / "
+                                f"{size_total / 1e9:.1f}GB total "
+                                f"({pct_gpu:.0f}% GPU)"
+                            )
+                            _en_ram = True
+                        break  # modelo encontrado, no seguir buscando en la lista
+            except Exception:
+                continue
+
+            if _en_gpu or _en_ram:
+                break  # modelo detectado — salir del polling
+
+        if _en_gpu:
+            break  # éxito — salir del bucle de reintentos
+
+        # Si no está en GPU, descargar y reintentar
+        logger.warning(
+            f"Intento {_intento}: '{_qwen_model}' no se cargó en GPU. "
+            "Descargando para reintentar..."
+        )
+        _req.post(
+            f"{_ollama_url}/api/generate",
+            json={"model": _qwen_model, "keep_alive": 0},
+            timeout=10,
+        )
+        time.sleep(5)  # esperar a que Ollama libere VRAM
+
+    except Exception as e:
+        logger.warning(
+            f"Intento {_intento}: error pre-cargando '{_qwen_model}': {e}"
+        )
+        if _intento < _max_intentos:
+            time.sleep(5)
+
+else:
+    logger.error(
+        f"FALLO: '{_qwen_model}' no se pudo cargar en GPU tras {_max_intentos} intentos. "
+        "Las inferencias serán lentas (RAM/disco)."
+    )
+
 logger.info("Worker finalizado.")

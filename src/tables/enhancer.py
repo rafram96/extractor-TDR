@@ -30,6 +30,7 @@ from src.config.settings import (
     QWEN_VL_MODEL,
     QWEN_VL_TIMEOUT,
     OLLAMA_BASE_URL,
+    QWEN_MODEL,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,7 @@ def _ejecutar_worker(
             "QWEN_VL_MODEL":             QWEN_VL_MODEL,
             "QWEN_VL_TIMEOUT":           QWEN_VL_TIMEOUT,
             "OLLAMA_BASE_URL":           OLLAMA_BASE_URL,
+            "QWEN_MODEL":               QWEN_MODEL,
         },
     }
 
