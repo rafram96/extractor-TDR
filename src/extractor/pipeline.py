@@ -70,13 +70,29 @@ def _comprimir_tabla_vl(text: str, max_chars: int = 4000) -> str:
     return texto_comprimido
 
 
+def _es_pagina_tabla_vl(text: str) -> bool:
+    """
+    Detecta si una página es predominantemente una tabla markdown (VL-enhanced).
+
+    Criterio: >60% de las líneas no-vacías son filas de tabla (empiezan con |)
+    y hay al menos 5 filas de tabla.
+    """
+    lineas = [l for l in text.strip().split("\n") if l.strip()]
+    if not lineas:
+        return False
+    lineas_tabla = [l for l in lineas if l.strip().startswith("|")]
+    return len(lineas_tabla) >= 5 and len(lineas_tabla) / len(lineas) > 0.6
+
+
 def _subdividir_bloque(block: Block) -> list[Block]:
     """
     Si un bloque supera _MAX_BLOCK_CHARS, lo divide en sub-bloques
     más pequeños con _OVERLAP_PAGES de solapamiento.
 
-    Antes de subdividir, comprime tablas VL grandes para que las páginas
-    con tablas no queden aisladas en sub-bloques sin contexto.
+    Antes de subdividir:
+    1. Comprime tablas VL con filas de descripción enormes.
+    2. Aísla páginas VL (tablas limpias) en sub-bloques propios para que
+       el LLM las lea sin ruido de OCR garbled circundante.
     """
     # Comprimir páginas con tablas VL antes de evaluar tamaño
     from src.extractor.scorer import PageScore
@@ -98,8 +114,29 @@ def _subdividir_bloque(block: Block) -> list[Block]:
     if len(block.text) <= _MAX_BLOCK_CHARS:
         return [block]
 
+    # ── Separar páginas VL (tablas limpias) de páginas normales ─────────
+    # Las páginas VL van en sub-bloques aislados para que el LLM las lea
+    # sin ruido. Las demás se agrupan normalmente por tamaño.
+    paginas_vl = []
+    paginas_normales = []
+    for p in block.pages:
+        if _es_pagina_tabla_vl(p.text):
+            paginas_vl.append(p)
+        else:
+            paginas_normales.append(p)
+
     sub_bloques = []
-    pages = block.pages
+
+    # Sub-bloques aislados para cada página VL
+    for p in paginas_vl:
+        sub_bloques.append(Block(block_type=block.block_type, pages=[p]))
+        logger.info(
+            f"[pipeline] Pág {p.page_num} aislada como sub-bloque VL "
+            f"({len(p.text)} chars, tabla markdown)"
+        )
+
+    # Sub-bloques normales con las páginas restantes
+    pages = paginas_normales
     i = 0
 
     while i < len(pages):
@@ -122,6 +159,9 @@ def _subdividir_bloque(block: Block) -> list[Block]:
             # _OVERLAP_PAGES páginas — sino es loop infinito
             if len(sub_pages) > _OVERLAP_PAGES:
                 i -= _OVERLAP_PAGES
+
+    # Ordenar sub-bloques por página inicial para mantener orden lógico
+    sub_bloques.sort(key=lambda sb: sb.pages[0].page_num)
 
     if sub_bloques:
         n_pages = [len(sb.pages) for sb in sub_bloques]
@@ -312,6 +352,66 @@ def _dedup_personal(lista: list[dict]) -> list[dict]:
     return list(por_cargo.values())
 
 
+def _extraer_especialidad(cargo: str) -> str | None:
+    """
+    Extrae la especialidad base de un cargo, independientemente de si es
+    "Asistente de X", "Asistente en X", o "Especialista en X".
+
+    Ejemplos:
+      "Asistente de Arquitectura"              → "arquitectura"
+      "Asistente en Ingeniería Sanitaria"      → "ingeniería sanitaria"
+      "Asistente en Instalaciones Eléctricas"   → "instalaciones eléctricas"
+      "Especialista en Arquitectura"            → "arquitectura"
+      "Especialista en Inst. Mecánicas"         → "instalaciones mecánicas"
+      "Jefe de elaboración..."                  → None (no aplica)
+    """
+    m = re.match(
+        r"(?:asistente|especialista)\s+(?:de|en)\s+(.+)$",
+        cargo.strip(), re.IGNORECASE,
+    )
+    return m.group(1).strip().lower() if m else None
+
+
+def _filtrar_asistentes(lista: list[dict]) -> list[dict]:
+    """
+    Elimina roles de "Asistente" cuando existe un "Especialista" para la
+    misma especialidad. Las secciones TDR/Anexo generan roles de soporte
+    que no son personal clave del concurso.
+    """
+    # Recopilar especialidades cubiertas por Especialistas (no Asistentes)
+    especialidades_cubiertas: set[str] = set()
+    for entrada in lista:
+        cargo = str(entrada.get("cargo", ""))
+        if re.match(r"especialista\b", cargo.strip(), re.IGNORECASE):
+            esp = _extraer_especialidad(cargo)
+            if esp:
+                especialidades_cubiertas.add(esp)
+
+    if not especialidades_cubiertas:
+        return lista
+
+    resultado = []
+    for entrada in lista:
+        cargo = str(entrada.get("cargo", ""))
+        if re.match(r"asistente\b", cargo.strip(), re.IGNORECASE):
+            esp = _extraer_especialidad(cargo)
+            if esp and esp in especialidades_cubiertas:
+                logger.info(
+                    f"[filtro] Descartado '{cargo}' — existe Especialista "
+                    f"en '{esp}'"
+                )
+                continue
+        resultado.append(entrada)
+
+    descartados = len(lista) - len(resultado)
+    if descartados:
+        logger.info(
+            f"[filtro] {descartados} Asistente(s) descartado(s) por tener "
+            f"Especialista equivalente"
+        )
+    return resultado
+
+
 def extraer_bases(
     full_text: str,
     nombre_archivo: str = "",
@@ -457,6 +557,13 @@ def extraer_bases(
 
     # Post-proceso: deduplicar personal y limpiar entradas vacías
     resultado["rtm_personal"] = _dedup_personal(resultado["rtm_personal"])
+
+    # Filtrar "Asistentes" espurios cuando existe un "Especialista" equivalente.
+    # Páginas de TDR/Anexo (ej: 36-42) generan roles de soporte ("Asistente de
+    # Arquitectura") que no son personal clave del concurso. Si existe un
+    # "Especialista en Arquitectura" de la sección de calificación, el Asistente
+    # es redundante.
+    resultado["rtm_personal"] = _filtrar_asistentes(resultado["rtm_personal"])
 
     # Validación final: eliminar registros con ≥80% de campos nulos
     resultado["rtm_postor"] = _filtrar_registros_vacios(
