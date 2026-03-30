@@ -126,6 +126,10 @@ def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=QWEN_MAX_TOKENS,
+            extra_body={
+                "keep_alive": "10m",
+                "options": {"num_gpu": 99},
+            },
         )
         elapsed = time.perf_counter() - t0
     except Exception as e:
