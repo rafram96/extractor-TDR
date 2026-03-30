@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -18,11 +19,105 @@ _MAX_BLOCK_CHARS = 15_000
 _OVERLAP_PAGES = 1  # páginas de solapamiento entre sub-bloques
 
 
+def _comprimir_tabla_vl(text: str, max_chars: int = 4000) -> str:
+    """
+    Comprime tablas markdown grandes generadas por Qwen VL.
+
+    Las tablas VL incluyen columnas de "Descripción de actividades mínimas"
+    que ocupan miles de chars pero no son relevantes para la extracción de
+    requisitos (cargo, profesión, experiencia, colegiatura, capacitación).
+
+    Estrategia: si la página tiene una tabla markdown > max_chars,
+    elimina las columnas no esenciales y conserva solo las de identificación.
+    """
+    if len(text) <= max_chars:
+        return text
+
+    # Detectar si el texto tiene tablas markdown (líneas con |)
+    lineas = text.split("\n")
+    lineas_tabla = [l for l in lineas if "|" in l and l.strip().startswith("|")]
+    if len(lineas_tabla) < 3:
+        return text  # No es una tabla significativa
+
+    # Columnas a conservar (por contenido del encabezado)
+    _COLS_ESENCIALES = {
+        "item", "ítem", "cargo", "puesto", "denominación", "denominacion",
+        "profesión", "profesion", "grado", "título", "titulo", "cant",
+        "cantidad", "formación", "formacion", "experiencia", "tiempo",
+        "colegiatura", "colegiado", "capacitación", "capacitacion",
+    }
+
+    resultado = []
+    indices_esenciales = None
+
+    for linea in lineas:
+        if "|" not in linea or not linea.strip().startswith("|"):
+            resultado.append(linea)
+            continue
+
+        celdas = [c.strip() for c in linea.split("|")]
+
+        # Primera fila con texto = encabezado → determinar qué columnas conservar
+        if indices_esenciales is None:
+            indices_esenciales = []
+            for i, celda in enumerate(celdas):
+                celda_lower = celda.lower().strip(" -")
+                if not celda_lower:
+                    indices_esenciales.append(i)  # Conservar columnas vacías (bordes)
+                    continue
+                # ¿Es columna esencial?
+                if any(kw in celda_lower for kw in _COLS_ESENCIALES):
+                    indices_esenciales.append(i)
+                # Si es separador (---), conservar también
+                elif re.match(r"^-+$", celda_lower):
+                    indices_esenciales.append(i)
+
+            # Si no identificamos columnas (tabla sin encabezado claro), conservar todo
+            if len(indices_esenciales) <= 2:
+                return text
+
+        # Filtrar solo columnas esenciales
+        celdas_filtradas = [
+            celdas[i] if i < len(celdas) else ""
+            for i in indices_esenciales
+        ]
+        resultado.append("| " + " | ".join(celdas_filtradas) + " |")
+
+    texto_comprimido = "\n".join(resultado)
+    if len(texto_comprimido) < len(text):
+        ahorro = len(text) - len(texto_comprimido)
+        logger.info(
+            f"[pipeline] Tabla VL comprimida: {len(text)} → {len(texto_comprimido)} chars "
+            f"(−{ahorro} chars, {ahorro*100//len(text)}% reducción)"
+        )
+    return texto_comprimido
+
+
 def _subdividir_bloque(block: Block) -> list[Block]:
     """
     Si un bloque supera _MAX_BLOCK_CHARS, lo divide en sub-bloques
     más pequeños con _OVERLAP_PAGES de solapamiento.
+
+    Antes de subdividir, comprime tablas VL grandes para que las páginas
+    con tablas no queden aisladas en sub-bloques sin contexto.
     """
+    # Comprimir páginas con tablas VL antes de evaluar tamaño
+    from src.extractor.scorer import PageScore
+    pages_comprimidas = []
+    for p in block.pages:
+        if len(p.text) > 4000 and "|" in p.text:
+            texto_comprimido = _comprimir_tabla_vl(p.text)
+            if texto_comprimido != p.text:
+                p = PageScore(
+                    page_num=p.page_num,
+                    confidence=p.confidence,
+                    text=texto_comprimido,
+                    scores=p.scores,
+                )
+        pages_comprimidas.append(p)
+
+    block = Block(block_type=block.block_type, pages=pages_comprimidas)
+
     if len(block.text) <= _MAX_BLOCK_CHARS:
         return [block]
 
@@ -143,6 +238,7 @@ def _merge_deep(base: dict, nuevo: dict) -> dict:
     Fusiona dos dicts: campos no-nulos de 'nuevo' rellenan los nulos de 'base'.
     Para sub-dicts (experiencia_minima, capacitacion), fusiona recursivamente.
     Para listas, conserva la más larga.
+    Para strings, si ambos son no-nulos conserva el más largo (más informativo).
     """
     resultado = dict(base)
     for k, v in nuevo.items():
@@ -156,13 +252,51 @@ def _merge_deep(base: dict, nuevo: dict) -> dict:
                 resultado[k] = v
         elif _es_nulo(base_v) and not _es_nulo(v):
             resultado[k] = v
+        elif (isinstance(base_v, str) and isinstance(v, str)
+              and not _es_nulo(base_v) and not _es_nulo(v)):
+            # Preferir string más largo (más informativo)
+            if len(v) > len(base_v):
+                resultado[k] = v
     return resultado
+
+
+def _normalizar_cargo(cargo: str) -> str:
+    """
+    Normaliza nombre de cargo para dedup fuzzy.
+
+    Ejemplos:
+      "Jefe de elaboración del expediente técnico"
+        → "jefe"
+      "Jefe y/o Gerente y/o Director y/o Gestor y/o Coordinador"
+        → "jefe"
+      "Gestor BIM y/o líder BIM y/o Supervisor BIM..."
+        → "gestor bim"
+      "Gestor BIM"
+        → "gestor bim"
+      "Especialista en Arquitectura"
+        → "especialista en arquitectura"
+    """
+    # 1. Tomar primera alternativa de "X y/o Y y/o Z"
+    base = re.split(r"\s+y/o\s+", cargo.strip(), maxsplit=1)[0].strip()
+
+    # 2. Quitar frases de acción tras el cargo base:
+    #    "de elaboración del expediente técnico" → ""
+    #    "en la elaboración de expedientes" → ""
+    #    Pero NO quitar "en Arquitectura", "en Estructuras", etc.
+    base = re.sub(
+        r"\s+(?:de|en)\s+(?:la\s+)?(?:elaboración|desarrollo|supervisión|diseño)"
+        r"(?:\s+\S+)*$",
+        "", base, flags=re.IGNORECASE,
+    )
+
+    return base.strip().lower()
 
 
 def _dedup_personal(lista: list[dict]) -> list[dict]:
     """
-    Fusiona duplicados de personal clave por cargo.
-    Cuando hay dos entradas del mismo cargo, combina sus campos:
+    Fusiona duplicados de personal clave por cargo normalizado.
+    Cuando hay dos entradas del mismo cargo (ej. "Gestor BIM" y
+    "Gestor BIM y/o líder BIM..."), combina sus campos:
     los no-nulos de cada entrada se complementan mutuamente.
     """
     por_cargo: dict[str, dict] = {}
@@ -171,11 +305,14 @@ def _dedup_personal(lista: list[dict]) -> list[dict]:
         if _es_nulo(cargo):
             continue
 
-        cargo_key = str(cargo).strip().lower()
+        cargo_key = _normalizar_cargo(str(cargo))
         if cargo_key not in por_cargo:
             por_cargo[cargo_key] = entrada
         else:
             por_cargo[cargo_key] = _merge_deep(por_cargo[cargo_key], entrada)
+            logger.debug(
+                f"[dedup] Fusionado cargo '{cargo}' → key '{cargo_key}'"
+            )
 
     return list(por_cargo.values())
 

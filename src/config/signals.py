@@ -120,8 +120,11 @@ Eres un extractor de datos de bases de concurso público peruano (OSCE).
 Responde SOLO con JSON válido, sin explicaciones. /no_think
 
 REGLA CRÍTICA:
-- Si el texto NO contiene una tabla o lista de personal clave con cargos, profesiones
-  y experiencia mínima, responde: {{"personal_clave": []}}
+- Si el texto NO contiene NINGUNA información sobre personal clave (ni cargos, ni profesiones,
+  ni experiencia), responde: {{"personal_clave": []}}
+- Si encuentras datos PARCIALES (ej: tabla con cargos y profesiones pero sin datos de experiencia,
+  o viceversa), extrae lo que haya y deja los campos faltantes como null.
+  Esto es importante: una tabla B.1 sin B.2 DEBE extraerse con experiencia en null.
 - NUNCA inventes datos, ejemplos ni plantillas. NO uses frases como "podría ser" o "ejemplo".
 - Solo extrae información que REALMENTE aparece en el texto proporcionado.
 - Extrae TODOS los cargos que encuentres, no solo algunos.
