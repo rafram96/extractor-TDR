@@ -209,8 +209,7 @@ def _ejecutar_worker(
                 reemplazos: dict[int, str] = pickle.load(f)
             logger.info(
                 f"[enhancer] Worker completado — "
-                f"{sum(1 for v in reemplazos.values() if not v.startswith('[Tabla continúa'))} "
-                f"grupo(s) con tabla válida"
+                f"{len(reemplazos)} grupo(s) con tabla válida"
             )
             return reemplazos
         else:

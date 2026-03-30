@@ -151,6 +151,25 @@ ESTRUCTURA DEL DOCUMENTO:
 
 REGLA: combina B.1 y B.2 por cargo. Si un campo no está en el texto, usa null. NO inventes.
 
+EXTRACCIÓN DE TIEMPO DE COLEGIADO (anos_colegiado):
+- Busca patrones como "N meses" cerca de "colegiatura", "colegiado", "Computada desde la fecha
+  de la colegiatura", o en columnas de la tabla etiquetadas "Tiempo de Colegiado".
+- El OCR puede fragmentarlo: "48 meses (Computada desde la fecha de la colegiatura)"
+  o "Tiempo mín. de colegiatura: 36 meses".
+- Extrae el STRING completo incluyendo la unidad, ej: "48 meses", "36 meses", "24 meses".
+
+EXTRACCIÓN DE CAPACITACIÓN (capacitacion):
+- Busca patrones como "Programa", "Curso", "Diplomado", "Especialización" seguido de
+  "(mín. Xh)" o "(mínimo X horas)" y luego el tema.
+- Ejemplo OCR: "Prog./Curso/Dipl. (mín. 60h) en Gestión de Proyectos, Expedientes Técnicos"
+  → tema: "Gestión de Proyectos, Expedientes Técnicos, ...", tipo: "Programa/Curso/Diplomado",
+    duracion_minima_horas: 60
+- Ejemplo OCR: "Especialización (mín. 120h) en Gestión BIM, BIM Management"
+  → tema: "Gestión BIM, BIM Management, ...", tipo: "Especialización",
+    duracion_minima_horas: 120
+- El campo "tipo" es la categoría: "Programa/Curso/Diplomado" o "Especialización".
+- Si la capacitación solo se exige como RTM (sin puntaje extra), es_factor_evaluacion = false.
+
 TEXTO:
 {texto}
 
@@ -159,7 +178,7 @@ TEXTO:
     {{
       "cargo": "nombre exacto del cargo según el documento",
       "profesiones_aceptadas": ["lista de profesiones/títulos válidos"],
-      "anos_colegiado": null,
+      "anos_colegiado": "N meses (texto tal como aparece, ej: '48 meses')",
       "experiencia_minima": {{
         "cantidad": número entero de meses (busca patrón "N meses en el cargo"),
         "unidad": "meses",
@@ -171,9 +190,9 @@ TEXTO:
       "tipo_obra_valido": "contenido de la nota (*) con especialidad y subespecialidades, o null",
       "tiempo_adicional_factores": null,
       "capacitacion": {{
-        "tema": null,
-        "tipo": null,
-        "duracion_minima_horas": null,
+        "tema": "tema(s) de la capacitación tal como aparecen en el texto",
+        "tipo": "Programa/Curso/Diplomado o Especialización",
+        "duracion_minima_horas": número entero de horas mínimas,
         "es_factor_evaluacion": false
       }},
       "pagina": número de página donde aparece la sección B.2 para este cargo

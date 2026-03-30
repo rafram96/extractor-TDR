@@ -138,29 +138,44 @@ def _filtrar_registros_vacios(
     return filtrados
 
 
+def _merge_deep(base: dict, nuevo: dict) -> dict:
+    """
+    Fusiona dos dicts: campos no-nulos de 'nuevo' rellenan los nulos de 'base'.
+    Para sub-dicts (experiencia_minima, capacitacion), fusiona recursivamente.
+    Para listas, conserva la más larga.
+    """
+    resultado = dict(base)
+    for k, v in nuevo.items():
+        if k.startswith("_"):
+            continue
+        base_v = resultado.get(k)
+        if isinstance(base_v, dict) and isinstance(v, dict):
+            resultado[k] = _merge_deep(base_v, v)
+        elif isinstance(base_v, list) and isinstance(v, list):
+            if len(v) > len(base_v):
+                resultado[k] = v
+        elif _es_nulo(base_v) and not _es_nulo(v):
+            resultado[k] = v
+    return resultado
+
+
 def _dedup_personal(lista: list[dict]) -> list[dict]:
     """
-    Elimina duplicados de personal clave por cargo.
-    Cuando hay dos entradas del mismo cargo, conserva la que tenga
-    más campos completos (menos nulls en experiencia_minima).
+    Fusiona duplicados de personal clave por cargo.
+    Cuando hay dos entradas del mismo cargo, combina sus campos:
+    los no-nulos de cada entrada se complementan mutuamente.
     """
     por_cargo: dict[str, dict] = {}
     for entrada in lista:
         cargo = entrada.get("cargo")
         if _es_nulo(cargo):
-            continue  # descarta entradas sin cargo
+            continue
 
         cargo_key = str(cargo).strip().lower()
         if cargo_key not in por_cargo:
             por_cargo[cargo_key] = entrada
         else:
-            # Compara completitud de experiencia_minima
-            def _completitud(e: dict) -> int:
-                em = e.get("experiencia_minima") or {}
-                return sum(1 for v in em.values() if not _es_nulo(v))
-
-            if _completitud(entrada) > _completitud(por_cargo[cargo_key]):
-                por_cargo[cargo_key] = entrada
+            por_cargo[cargo_key] = _merge_deep(por_cargo[cargo_key], entrada)
 
     return list(por_cargo.values())
 

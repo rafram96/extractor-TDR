@@ -177,12 +177,12 @@ for grupo in grupos:
     if md is None:
         continue
 
-    # Primera página: markdown completo; resto: marcador de continuación
+    # Solo la primera página recibe el markdown de la tabla completa.
+    # Las páginas de continuación NO se tocan — mantienen su texto OCR original
+    # para que el LLM pueda extraer datos de columnas que Qwen VL no capturó.
     resultados[grupo[0]] = md
-    for pag_extra in grupo[1:]:
-        resultados[pag_extra] = f"[Tabla continúa desde página {grupo[0]}]"
 
-exitosos = sum(1 for v in resultados.values() if not v.startswith("[Tabla continúa"))
+exitosos = len(resultados)
 logger.info(f"Completado: {exitosos} grupo(s) exitoso(s) de {len(grupos)}")
 
 with open(output_pkl_path, "wb") as f:
