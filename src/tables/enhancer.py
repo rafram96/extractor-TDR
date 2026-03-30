@@ -16,7 +16,7 @@ from src.tables.docling_client import confirmar_tablas, check_docling_available,
 from src.tables.image_utils import extraer_multiples_paginas, crop_tabla, PaginaImagen
 from src.tables.vision import leer_tabla_visual, leer_tabla_crosspage
 from src.tables.validator import validar_tabla_markdown
-from src.config.settings import TABLE_DETECT_THRESHOLD, TABLE_VALIDATOR_MIN_SCORE
+from src.config.settings import TABLE_DETECT_THRESHOLD, TABLE_VALIDATOR_MIN_SCORE, USE_DOCLING
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +112,9 @@ def mejorar_texto_con_tablas(
 
     # ── 4. Confirmación con Docling ──────────────────────────────────────
     t_docling = time.time()
-    if not check_docling_available():
-        logger.warning(
-            "[enhancer] Docling no disponible — usando heurística pura "
+    if not USE_DOCLING or not check_docling_available():
+        logger.info(
+            "[enhancer] Docling desactivado — usando heurística pura "
             "(sin bbox, se manda página completa a Qwen VL)"
         )
         tablas_confirmadas = [

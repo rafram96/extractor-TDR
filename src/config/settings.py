@@ -27,6 +27,7 @@ SCORER_CONTEXT    = 1     # páginas de contexto antes/después de cada bloque
 TABLE_DETECT_THRESHOLD   = 0.4   # score mínimo heurística para pre-filtro
 TABLE_DOCLING_DPI        = 200   # resolución para extracción de imágenes
 TABLE_VALIDATOR_MIN_SCORE = 0.5  # score mínimo para aceptar tabla de Qwen VL
+USE_DOCLING              = False # False = saltar Docling (ahorra ~2GB RAM), usar heurística + Qwen VL
 
 # ── Paths de salida ───────────────────────────────────────────────────────────
 OUTPUT_DIR = Path("output")
