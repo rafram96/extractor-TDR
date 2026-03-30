@@ -28,6 +28,7 @@ TABLE_DETECT_THRESHOLD    = 0.4   # score mínimo heurística para pre-filtro
 TABLE_DOCLING_DPI         = 150   # DPI para imágenes (200 generaba payloads de 21MB, fallaba en batches)
 TABLE_VALIDATOR_MIN_SCORE = 0.5   # score mínimo para aceptar tabla de Qwen VL
 TABLE_VL_MAX_BATCH        = 3     # máximo imágenes por llamada a Qwen VL cross-page
+TABLE_VL_MAX_GROUP        = 4     # máximo páginas consecutivas por grupo VL (evita fusionar tablas distintas)
 TABLE_VL_MAX_PX           = 900   # máximo px en el lado más largo antes de enviar a VL
 USE_DOCLING               = False # False = saltar Docling, usar heurística + Qwen VL directo
 

@@ -26,6 +26,7 @@ from src.config.settings import (
     TABLE_DETECT_THRESHOLD,
     TABLE_VALIDATOR_MIN_SCORE,
     TABLE_VL_MAX_BATCH,
+    TABLE_VL_MAX_GROUP,
     TABLE_VL_MAX_PX,
     QWEN_VL_MODEL,
     QWEN_VL_TIMEOUT,
@@ -242,14 +243,23 @@ def _parsear_textos_pagina(full_text: str) -> dict[int, str]:
     return paginas
 
 
-def _agrupar_consecutivas(paginas: list[int]) -> list[list[int]]:
-    """Agrupa páginas consecutivas en sublistas."""
+def _agrupar_consecutivas(
+    paginas: list[int],
+    max_size: int = TABLE_VL_MAX_GROUP,
+) -> list[list[int]]:
+    """
+    Agrupa páginas consecutivas en sublistas, con tamaño máximo.
+
+    El límite de tamaño evita que tablas distintas (ej: B.1 en págs 136-139
+    y B.2 en págs 140-143) se fusionen en un solo grupo. Cuando eso ocurre,
+    el VL solo captura UNA tabla y las demás mantienen OCR garbled.
+    """
     if not paginas:
         return []
     ordenadas = sorted(paginas)
     grupos: list[list[int]] = [[ordenadas[0]]]
     for p in ordenadas[1:]:
-        if p - grupos[-1][-1] == 1:
+        if p - grupos[-1][-1] == 1 and len(grupos[-1]) < max_size:
             grupos[-1].append(p)
         else:
             grupos.append([p])
