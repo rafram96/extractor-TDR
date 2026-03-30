@@ -33,6 +33,60 @@ def _limpiar_nulls(obj: Any) -> Any:
     return obj
 
 
+def _contar_campos(obj: Any) -> tuple[int, int]:
+    """
+    Cuenta (total_campos, campos_nulos) de forma recursiva.
+    Para dicts anidados, cuenta sus campos internos en vez del dict como 1 campo.
+    Para listas, cuenta como nulo si está vacía.
+    """
+    if isinstance(obj, dict):
+        total = 0
+        nulos = 0
+        for v in obj.values():
+            t, n = _contar_campos(v)
+            total += t
+            nulos += n
+        return total, nulos
+    # Un campo hoja
+    es_nulo = _es_nulo(obj) or (isinstance(obj, list) and len(obj) == 0)
+    return 1, (1 if es_nulo else 0)
+
+
+def _filtrar_registros_vacios(
+    lista: list[dict],
+    nombre_seccion: str,
+    umbral: float = 0.80,
+) -> list[dict]:
+    """
+    Elimina registros donde el porcentaje de campos nulos >= umbral.
+    Por defecto elimina registros con 80% o más de campos nulos.
+    """
+    filtrados = []
+    for registro in lista:
+        total, nulos = _contar_campos(registro)
+        if total == 0:
+            logger.debug(f"[validador] {nombre_seccion}: descartado registro sin campos")
+            continue
+        ratio = nulos / total
+        if ratio >= umbral:
+            # Vista previa del registro para el log
+            preview = {k: v for k, v in registro.items()
+                       if not _es_nulo(v) and k != "archivo"}
+            logger.info(
+                f"[validador] {nombre_seccion}: descartado registro "
+                f"({nulos}/{total} campos nulos = {ratio:.0%}): {preview}"
+            )
+            continue
+        filtrados.append(registro)
+    descartados = len(lista) - len(filtrados)
+    if descartados:
+        logger.info(
+            f"[validador] {nombre_seccion}: {descartados} registro(s) descartado(s) "
+            f"por tener ≥{umbral:.0%} campos nulos"
+        )
+    return filtrados
+
+
 def _dedup_personal(lista: list[dict]) -> list[dict]:
     """
     Elimina duplicados de personal clave por cargo.
@@ -175,6 +229,17 @@ def extraer_bases(
 
     # Post-proceso: deduplicar personal y limpiar entradas vacías
     resultado["rtm_personal"] = _dedup_personal(resultado["rtm_personal"])
+
+    # Validación final: eliminar registros con ≥80% de campos nulos
+    resultado["rtm_postor"] = _filtrar_registros_vacios(
+        resultado["rtm_postor"], "rtm_postor",
+    )
+    resultado["rtm_personal"] = _filtrar_registros_vacios(
+        resultado["rtm_personal"], "rtm_personal",
+    )
+    resultado["factores_evaluacion"] = _filtrar_registros_vacios(
+        resultado["factores_evaluacion"], "factores_evaluacion",
+    )
 
     logger.info(
         f"[pipeline] Resultado: "
