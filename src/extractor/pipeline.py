@@ -89,15 +89,34 @@ def _subdividir_bloque(block: Block) -> list[Block]:
     Si un bloque supera _MAX_BLOCK_CHARS, lo divide en sub-bloques
     más pequeños con _OVERLAP_PAGES de solapamiento.
 
-    Antes de subdividir:
-    1. Comprime tablas VL con filas de descripción enormes.
-    2. Aísla páginas VL (tablas limpias) en sub-bloques propios para que
-       el LLM las lea sin ruido de OCR garbled circundante.
+    Orden de operaciones:
+    1. Detecta páginas VL (tablas limpias) ANTES de comprimir — estas se
+       aíslan intactas en sub-bloques propios.
+    2. Comprime solo las páginas NO-VL que tengan tablas de descripción.
+    3. Agrupa las páginas normales por tamaño.
+
+    Esto garantiza que la tabla B.2 (experiencia, meses) llegue intacta
+    al LLM, mientras que las tablas B.1 (descripciones enormes de 500+
+    chars por celda) se comprimen para no reventar el contexto.
     """
-    # Comprimir páginas con tablas VL antes de evaluar tamaño
     from src.extractor.scorer import PageScore
-    pages_comprimidas = []
+
+    # ── 1. Detectar páginas VL ANTES de cualquier compresión ────────────
+    paginas_vl = []
+    paginas_normales = []
     for p in block.pages:
+        if _es_pagina_tabla_vl(p.text):
+            paginas_vl.append(p)
+            logger.debug(
+                f"[pipeline] Pág {p.page_num}: detectada como tabla VL "
+                f"({len(p.text)} chars)"
+            )
+        else:
+            paginas_normales.append(p)
+
+    # ── 2. Comprimir solo páginas normales con tablas grandes ───────────
+    pages_comprimidas = []
+    for p in paginas_normales:
         if len(p.text) > 4000 and "|" in p.text:
             texto_comprimido = _comprimir_tabla_vl(p.text)
             if texto_comprimido != p.text:
@@ -109,25 +128,18 @@ def _subdividir_bloque(block: Block) -> list[Block]:
                 )
         pages_comprimidas.append(p)
 
-    block = Block(block_type=block.block_type, pages=pages_comprimidas)
+    # ── 3. Si no hay páginas VL y el bloque cabe, devolver directo ──────
+    if not paginas_vl:
+        block_comprimido = Block(
+            block_type=block.block_type, pages=pages_comprimidas,
+        )
+        if len(block_comprimido.text) <= _MAX_BLOCK_CHARS:
+            return [block_comprimido]
 
-    if len(block.text) <= _MAX_BLOCK_CHARS:
-        return [block]
-
-    # ── Separar páginas VL (tablas limpias) de páginas normales ─────────
-    # Las páginas VL van en sub-bloques aislados para que el LLM las lea
-    # sin ruido. Las demás se agrupan normalmente por tamaño.
-    paginas_vl = []
-    paginas_normales = []
-    for p in block.pages:
-        if _es_pagina_tabla_vl(p.text):
-            paginas_vl.append(p)
-        else:
-            paginas_normales.append(p)
-
+    # ── 4. Construir sub-bloques ────────────────────────────────────────
     sub_bloques = []
 
-    # Sub-bloques aislados para cada página VL
+    # 4a. Sub-bloques aislados para cada página VL (intactas, sin comprimir)
     for p in paginas_vl:
         sub_bloques.append(Block(block_type=block.block_type, pages=[p]))
         logger.info(
@@ -135,43 +147,48 @@ def _subdividir_bloque(block: Block) -> list[Block]:
             f"({len(p.text)} chars, tabla markdown)"
         )
 
-    # Sub-bloques normales con las páginas restantes
-    pages = paginas_normales
-    i = 0
+    # 4b. Sub-bloques normales con las páginas comprimidas restantes
+    pages = pages_comprimidas
+    total_normal_chars = sum(len(p.text) for p in pages)
 
-    while i < len(pages):
-        # Acumular páginas hasta llegar al límite
-        sub_pages = []
-        chars = 0
-        while i < len(pages) and (chars + len(pages[i].text)) <= _MAX_BLOCK_CHARS:
-            sub_pages.append(pages[i])
-            chars += len(pages[i].text)
-            i += 1
+    if pages and total_normal_chars <= _MAX_BLOCK_CHARS:
+        # Todas las normales caben en un solo sub-bloque
+        sub_bloques.append(Block(block_type=block.block_type, pages=pages))
+    elif pages:
+        # Subdividir por tamaño
+        i = 0
+        while i < len(pages):
+            sub_pages = []
+            chars = 0
+            while i < len(pages) and (chars + len(pages[i].text)) <= _MAX_BLOCK_CHARS:
+                sub_pages.append(pages[i])
+                chars += len(pages[i].text)
+                i += 1
 
-        # Si no pudimos agregar ni una página (página individual > límite), agregarla sola
-        if not sub_pages and i < len(pages):
-            sub_pages.append(pages[i])
-            i += 1
+            if not sub_pages and i < len(pages):
+                sub_pages.append(pages[i])
+                i += 1
 
-        if sub_pages:
-            sub_bloques.append(Block(block_type=block.block_type, pages=sub_pages))
-            # Retroceder para solapamiento, pero solo si avanzamos más de
-            # _OVERLAP_PAGES páginas — sino es loop infinito
-            if len(sub_pages) > _OVERLAP_PAGES:
-                i -= _OVERLAP_PAGES
+            if sub_pages:
+                sub_bloques.append(Block(
+                    block_type=block.block_type, pages=sub_pages,
+                ))
+                if len(sub_pages) > _OVERLAP_PAGES:
+                    i -= _OVERLAP_PAGES
 
     # Ordenar sub-bloques por página inicial para mantener orden lógico
     sub_bloques.sort(key=lambda sb: sb.pages[0].page_num)
 
-    if sub_bloques:
+    if len(sub_bloques) > 1:
         n_pages = [len(sb.pages) for sb in sub_bloques]
+        total_chars = sum(len(p.text) for sb in sub_bloques for p in sb.pages)
         logger.info(
             f"[pipeline] Bloque '{block.block_type}' págs {block.page_range} "
-            f"({len(block.text)} chars) → {len(sub_bloques)} sub-bloques "
+            f"({total_chars} chars) → {len(sub_bloques)} sub-bloques "
             f"({n_pages} págs)"
         )
 
-    return sub_bloques
+    return sub_bloques if sub_bloques else [block]
 
 
 
@@ -374,42 +391,143 @@ def _extraer_especialidad(cargo: str) -> str | None:
 
 def _filtrar_asistentes(lista: list[dict]) -> list[dict]:
     """
-    Elimina roles de "Asistente" cuando existe un "Especialista" para la
-    misma especialidad. Las secciones TDR/Anexo generan roles de soporte
-    que no son personal clave del concurso.
+    Elimina roles de "Asistente" cuando existen "Especialistas" en los
+    resultados. En documentos OSCE, los Asistentes aparecen en la sección
+    TDR/Funciones (págs 36-42) y son roles de soporte, NO personal clave
+    del concurso (que son los Especialistas de las tablas B.1/B.2).
+
+    Estrategia:
+    1. Si hay al menos un Especialista, activar filtro.
+    2. Recopilar especialidades normalizadas de Especialistas
+       (usa _normalizar_cargo para "en la especialidad de X" → "x").
+    3. Para cada Asistente, normalizar su especialidad y comparar.
+    4. Si hay match directo → descartar.
+    5. Si no hay match pero hay Especialistas → descartar también
+       (ej: "Asistente en Ingeniería Civil" no matchea ningún
+       Especialista porque el equivalente es "Estructuras", pero
+       sigue siendo un rol TDR, no personal clave).
     """
-    # Recopilar especialidades cubiertas por Especialistas (no Asistentes)
+    # Recopilar especialidades normalizadas de Especialistas
     especialidades_cubiertas: set[str] = set()
+    tiene_especialistas = False
     for entrada in lista:
         cargo = str(entrada.get("cargo", ""))
-        if re.match(r"especialista\b", cargo.strip(), re.IGNORECASE):
-            esp = _extraer_especialidad(cargo)
-            if esp:
-                especialidades_cubiertas.add(esp)
+        normalizado = _normalizar_cargo(cargo)
+        if normalizado.startswith("especialista"):
+            tiene_especialistas = True
+            # Extraer la parte después de "especialista en "
+            m = re.match(r"especialista\s+(?:de|en)\s+(.+)$", normalizado)
+            if m:
+                especialidades_cubiertas.add(m.group(1).strip())
 
-    if not especialidades_cubiertas:
+    if not tiene_especialistas:
         return lista
 
     resultado = []
     for entrada in lista:
         cargo = str(entrada.get("cargo", ""))
-        if re.match(r"asistente\b", cargo.strip(), re.IGNORECASE):
-            esp = _extraer_especialidad(cargo)
-            if esp and esp in especialidades_cubiertas:
+        normalizado = _normalizar_cargo(cargo)
+        if normalizado.startswith("asistente"):
+            # Extraer especialidad del asistente normalizado
+            m = re.match(r"asistente\s+(?:de|en)\s+(.+)$", normalizado)
+            esp_asist = m.group(1).strip() if m else None
+
+            if esp_asist and esp_asist in especialidades_cubiertas:
                 logger.info(
-                    f"[filtro] Descartado '{cargo}' — existe Especialista "
-                    f"en '{esp}'"
+                    f"[filtro] Descartado '{cargo}' — match directo con "
+                    f"Especialista en '{esp_asist}'"
                 )
-                continue
+            else:
+                # No hay match directo, pero es un Asistente de sección TDR
+                # y existen Especialistas → descartar igualmente
+                logger.info(
+                    f"[filtro] Descartado '{cargo}' — rol de soporte TDR, "
+                    f"no es personal clave del concurso"
+                )
+            continue
         resultado.append(entrada)
 
     descartados = len(lista) - len(resultado)
     if descartados:
         logger.info(
-            f"[filtro] {descartados} Asistente(s) descartado(s) por tener "
-            f"Especialista equivalente"
+            f"[filtro] {descartados} Asistente(s) descartado(s) "
+            f"(sección TDR, no personal clave)"
         )
     return resultado
+
+
+def _guardar_debug_bloques(
+    blocks: list[Block],
+    output_dir: Path,
+) -> None:
+    """
+    Escribe output/bloques_debug.md con el texto exacto que cada sub-bloque
+    envía al LLM. Permite verificar:
+    - Si las páginas VL (tablas markdown) están aisladas
+    - Si la compresión destruyó datos útiles
+    - Qué texto ve el LLM para cada rango de páginas
+    """
+    from datetime import datetime
+
+    lineas = [
+        f"# Debug Sub-bloques → LLM — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        f"**Bloques detectados:** {len(blocks)}",
+        "",
+        "---",
+        "",
+    ]
+
+    bloque_num = 0
+    for block in blocks:
+        sub_blocks = _subdividir_bloque(block)
+        for i_sub, sb in enumerate(sub_blocks, 1):
+            bloque_num += 1
+            es_vl = any(
+                _es_pagina_tabla_vl(p.text) for p in sb.pages
+            )
+            tag = " 🟢 VL AISLADO" if es_vl and len(sb.pages) == 1 else ""
+
+            lineas.append(
+                f"## Bloque {bloque_num}: [{block.block_type}] "
+                f"págs {sb.page_range} "
+                f"({len(sb.text)} chars){tag}"
+            )
+            lineas.append("")
+
+            if len(sub_blocks) > 1:
+                lineas.append(
+                    f"*Sub-bloque {i_sub}/{len(sub_blocks)} "
+                    f"del bloque original págs {block.page_range}*"
+                )
+                lineas.append("")
+
+            # Texto por página
+            for p in sb.pages:
+                es_tabla = _es_pagina_tabla_vl(p.text)
+                tag_pag = " 📊 TABLA VL" if es_tabla else ""
+                lineas.append(
+                    f"### Página {p.page_num} ({len(p.text)} chars){tag_pag}"
+                )
+                lineas.append("```")
+                # Mostrar completo si es tabla VL (son los datos clave),
+                # truncar si es texto normal largo
+                if es_tabla or len(p.text) <= 2000:
+                    lineas.append(p.text)
+                else:
+                    lineas.append(p.text[:1000])
+                    lineas.append(f"\n... ({len(p.text) - 1000} chars más) ...")
+                    lineas.append(p.text[-500:])
+                lineas.append("```")
+                lineas.append("")
+
+            lineas.append("---")
+            lineas.append("")
+
+    output_path = Path(output_dir) / "bloques_debug.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lineas), encoding="utf-8")
+    logger.info(f"[pipeline] Debug bloques guardado en {output_path}")
 
 
 def extraer_bases(
@@ -494,6 +612,13 @@ def extraer_bases(
         "_bloques_detectados": [],
         "_tablas_stats":       vars(tablas_stats) if tablas_stats else None,
     }
+
+    # ── Debug: guardar texto de sub-bloques para inspección ──────────────
+    if output_dir:
+        try:
+            _guardar_debug_bloques(blocks, output_dir)
+        except Exception as e:
+            logger.warning(f"[pipeline] Error guardando debug bloques: {e}")
 
     t_llm_total = time.perf_counter()
     for i_block, block in enumerate(blocks, 1):

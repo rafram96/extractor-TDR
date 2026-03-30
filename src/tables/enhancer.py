@@ -136,6 +136,12 @@ def mejorar_texto_con_tablas(
                 "preview": "",
             })
 
+    # ── 4b. Guardar debug de tablas VL ─────────────────────────────────────────
+    #   Escribe output/vl_tablas_debug.md con el markdown crudo que generó
+    #   Qwen VL para cada grupo — permite verificar visualmente si los 12
+    #   profesionales están presentes antes de que el LLM los interprete.
+    _guardar_debug_vl(reemplazos, grupos, textos_por_pagina)
+
     # ── 5. Reemplazo selectivo en full_text ───────────────────────────────────
     if reemplazos:
         full_text = _reemplazar_selectivo(full_text, reemplazos, textos_por_pagina)
@@ -338,3 +344,79 @@ def _insertar_tabla_en_texto(texto_original: str, tabla_md: str) -> str:
         partes.append(despues)
 
     return "\n\n".join(partes)
+
+
+def _guardar_debug_vl(
+    reemplazos: dict[int, str],
+    grupos: list[list[int]],
+    textos_por_pagina: dict[int, str],
+) -> None:
+    """
+    Escribe output/vl_tablas_debug.md con el markdown crudo de Qwen VL.
+
+    Permite verificar visualmente:
+    - Qué tabla generó VL para cada grupo de páginas
+    - Si faltan filas (profesionales no capturados)
+    - Si el texto OCR original fue reemplazado correctamente
+    """
+    from datetime import datetime
+    from src.config.settings import OUTPUT_DIR
+
+    output_path = OUTPUT_DIR / "vl_tablas_debug.md"
+    try:
+        lineas = [
+            f"# Debug Tablas VL — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            f"**Grupos procesados:** {len(grupos)}",
+            f"**Grupos con resultado:** {len(reemplazos)}",
+            "",
+            "---",
+            "",
+        ]
+
+        for grupo in grupos:
+            primera = grupo[0]
+            lineas.append(f"## Grupo: páginas {grupo}")
+            lineas.append("")
+
+            if primera in reemplazos:
+                md = reemplazos[primera]
+                # Contar filas de tabla (excluyendo header y separator)
+                filas_datos = [
+                    l for l in md.strip().split("\n")
+                    if l.strip().startswith("|") and "---" not in l
+                ]
+                # Restar 1 por el header
+                n_datos = max(len(filas_datos) - 1, 0)
+                lineas.append(f"**Estado:** ✅ Validado — {n_datos} filas de datos")
+                lineas.append(f"**Chars:** {len(md)}")
+                lineas.append("")
+                lineas.append("### Markdown VL (crudo)")
+                lineas.append("```")
+                lineas.append(md)
+                lineas.append("```")
+            else:
+                lineas.append("**Estado:** ❌ Sin resultado (VL falló o no pasó validación)")
+
+            lineas.append("")
+
+            # Mostrar texto OCR original de cada página del grupo
+            lineas.append("### Texto OCR original por página")
+            for pag in grupo:
+                texto_ocr = textos_por_pagina.get(pag, "(no disponible)")
+                preview = texto_ocr[:500] + "..." if len(texto_ocr) > 500 else texto_ocr
+                lineas.append(f"#### Página {pag} ({len(texto_ocr)} chars)")
+                lineas.append("```")
+                lineas.append(preview)
+                lineas.append("```")
+                lineas.append("")
+
+            lineas.append("---")
+            lineas.append("")
+
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("\n".join(lineas), encoding="utf-8")
+        logger.info(f"[enhancer] Debug VL guardado en {output_path}")
+
+    except Exception as e:
+        logger.warning(f"[enhancer] Error guardando debug VL: {e}")
