@@ -76,6 +76,24 @@ def validar_tabla_markdown(md: str, min_score: float = 0.5) -> ResultadoValidaci
     else:
         varianza = max(col_counts) - min(col_counts)
 
+    # ── Rechazos duros ───────────────────────────────────────────────────
+    # Varianza > 3 en columnas: tabla rota (columnas completamente inconsistentes)
+    if varianza > 3:
+        return ResultadoValidacion(
+            valido=False, score=0.1,
+            num_filas=len(lineas), num_columnas=max_cols - 1,
+            razon=f"Columnas inconsistentes (varianza={varianza}, max tolerable=3)"
+        )
+
+    # Densidad mínima: menos de 4 chars por fila → respuesta vacía/garbage
+    chars_por_fila = len(md) / len(lineas) if lineas else 0
+    if chars_por_fila < 4:
+        return ResultadoValidacion(
+            valido=False, score=0.05,
+            num_filas=len(lineas), num_columnas=max_cols - 1,
+            razon=f"Respuesta demasiado corta ({len(md)} chars / {len(lineas)} filas = {chars_por_fila:.1f} chars/fila)"
+        )
+
     # ── Score compuesto ──────────────────────────────────────────────────
     score = 0.0
 

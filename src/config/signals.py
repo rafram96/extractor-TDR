@@ -48,8 +48,13 @@ SIGNALS: dict[str, list[tuple[str, float]]] = {
         (r"disposiciones comunes",                     2.0),
         (r"adelanto directo",                          1.5),
         # ── Nuevas señales para reducir ruido ──
-        (r"declaraci[oó]n jurada",                     2.5),
-        (r"anexo n",                                   2.0),
+        # "declaración jurada" aparece también en referencias — peso moderado
+        (r"declaraci[oó]n jurada",                     1.5),
+        # Señales estructurales de páginas que SON un anexo (formulario vacío)
+        (r"firma\s+(?:y\s+)?sello",                    2.5),  # pie de formulario
+        (r"datos\s+del\s+postor",                      2.0),  # cabecera de formulario
+        (r"denominaci[oó]n.{0,60}monto.{0,60}fecha",  3.0),  # encabezados de tabla vacía
+        (r"declaraci[oó]n\s+jurada\s+de\s+.{0,60}(?:experiencia|proveedor|ejecutor|postor)", 3.0),
         (r"estructura de costos",                      3.0),
         (r"precio de la oferta",                       2.5),
         (r"promesa de consorcio",                      2.5),

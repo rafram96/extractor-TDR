@@ -59,28 +59,56 @@ def _subdividir_bloque(block: Block) -> list[Block]:
     return sub_bloques
 
 
-def _descargar_modelo_ollama():
+def _descargar_modelo_ollama(timeout: int = 120, intervalo: float = 2.0):
     """
-    Descarga el modelo VL de Ollama para liberar VRAM
-    antes de que se cargue Qwen 14B para extracción.
-    Evita que ambos modelos estén en memoria simultáneamente.
+    Descarga el modelo VL de Ollama y espera (polling) hasta confirmar
+    que ya no aparece en /api/ps antes de continuar con Qwen 14B.
     """
+    import time
     import requests
     from src.config.settings import OLLAMA_BASE_URL, QWEN_VL_MODEL
+
+    # 1. Solicitar descarga
     try:
-        # keep_alive=0 le dice a Ollama que descargue el modelo inmediatamente
         requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": QWEN_VL_MODEL, "keep_alive": 0},
             timeout=10,
         )
-        logger.info(f"[pipeline] Modelo '{QWEN_VL_MODEL}' descargado de VRAM")
-        # Ollama libera VRAM de forma asíncrona — esperar antes de cargar 14b
-        import time
-        time.sleep(6)
-        logger.info("[pipeline] VRAM liberada, iniciando extracción con Qwen 14B")
+        logger.info(f"[pipeline] Solicitud de descarga enviada para '{QWEN_VL_MODEL}'")
     except Exception as e:
-        logger.warning(f"[pipeline] No se pudo descargar '{QWEN_VL_MODEL}': {e}")
+        logger.warning(f"[pipeline] No se pudo solicitar descarga de '{QWEN_VL_MODEL}': {e}")
+        return
+
+    # 2. Polling hasta que /api/ps no liste el modelo
+    transcurrido = 0.0
+    while transcurrido < timeout:
+        time.sleep(intervalo)
+        transcurrido += intervalo
+        try:
+            resp = requests.get(f"{OLLAMA_BASE_URL}/api/ps", timeout=5)
+            resp.raise_for_status()
+            modelos_activos = [
+                m.get("name", "") for m in resp.json().get("models", [])
+            ]
+            # Considerar descargado si el modelo ya no aparece en ps
+            if not any(QWEN_VL_MODEL in m for m in modelos_activos):
+                logger.info(
+                    f"[pipeline] '{QWEN_VL_MODEL}' confirmado fuera de VRAM "
+                    f"({transcurrido:.0f}s). Iniciando extracción con Qwen 14B."
+                )
+                return
+            logger.debug(
+                f"[pipeline] Esperando descarga de VL... ({transcurrido:.0f}s) "
+                f"activos: {modelos_activos}"
+            )
+        except Exception as e:
+            logger.debug(f"[pipeline] /api/ps error: {e}")
+
+    logger.warning(
+        f"[pipeline] Timeout ({timeout}s) esperando descarga de '{QWEN_VL_MODEL}'. "
+        "Continuando de todas formas — puede haber contención de VRAM."
+    )
 
 
 def _es_nulo(valor: Any) -> bool:

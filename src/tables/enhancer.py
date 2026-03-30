@@ -401,11 +401,10 @@ def _procesar_en_batches(
 ) -> str | None:
     """
     Procesa un grupo grande de imágenes en sub-batches de TABLE_VL_MAX_BATCH.
-    Concatena los resultados parciales en una sola tabla markdown.
-
-    Para tablas cross-page muy largas (ej: 8 páginas), las divide en bloques
-    de máximo TABLE_VL_MAX_BATCH imágenes y fusiona los markdowns resultantes.
+    Valida cada sub-batch individualmente antes de fusionar para que basura
+    en un sub-batch no contamine los resultados buenos de los otros.
     """
+    from src.config.settings import TABLE_VALIDATOR_MIN_SCORE
     resultados: list[str] = []
 
     for i in range(0, len(imagenes), TABLE_VL_MAX_BATCH):
@@ -422,12 +421,21 @@ def _procesar_en_batches(
         else:
             md = leer_tabla_crosspage(sub_imgs)
 
-        if md and "|" in md:
-            resultados.append(md)
-        else:
+        if not md or "|" not in md:
             logger.warning(
                 f"[enhancer] Sub-batch págs {sub_pags} no devolvió tabla válida"
             )
+            continue
+
+        # Validar individualmente antes de incluir en el merge
+        val = validar_tabla_markdown(md, min_score=TABLE_VALIDATOR_MIN_SCORE)
+        if not val.valido:
+            logger.warning(
+                f"[enhancer] Sub-batch págs {sub_pags} descartado: {val.razon}"
+            )
+            continue
+
+        resultados.append(md)
 
     if not resultados:
         return None
