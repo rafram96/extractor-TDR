@@ -188,4 +188,50 @@ logger.info(f"Completado: {exitosos} grupo(s) exitoso(s) de {len(grupos)}")
 with open(output_pkl_path, "wb") as f:
     pickle.dump(resultados, f)
 
+# ── Descargar modelo VL de Ollama antes de salir ─────────────────────────────
+# El proceso principal no puede arrancar Qwen 14B hasta que este modelo
+# esté fuera de VRAM. Hacemos keep_alive=0 + polling aquí, dentro del worker,
+# de modo que cuando subprocess.run() retorna al proceso padre, la VRAM
+# está garantizadamente libre.
+import time
+import requests as _req
+
+_ollama_url   = settings.get("OLLAMA_BASE_URL", "http://localhost:11434")
+_vl_model     = settings.get("QWEN_VL_MODEL", "qwen2.5vl:7b")
+_poll_timeout = 120
+_poll_interval = 2.0
+
+try:
+    _req.post(
+        f"{_ollama_url}/api/generate",
+        json={"model": _vl_model, "keep_alive": 0},
+        timeout=10,
+    )
+    logger.info(f"Solicitud de descarga enviada para '{_vl_model}'")
+except Exception as e:
+    logger.warning(f"No se pudo solicitar descarga de '{_vl_model}': {e}")
+
+transcurrido = 0.0
+while transcurrido < _poll_timeout:
+    time.sleep(_poll_interval)
+    transcurrido += _poll_interval
+    try:
+        resp = _req.get(f"{_ollama_url}/api/ps", timeout=5)
+        resp.raise_for_status()
+        activos = [m.get("name", "") for m in resp.json().get("models", [])]
+        if not any(_vl_model in m for m in activos):
+            logger.info(
+                f"'{_vl_model}' confirmado fuera de VRAM "
+                f"({transcurrido:.0f}s) — proceso principal puede cargar 14B"
+            )
+            break
+        logger.debug(f"Esperando descarga VL... ({transcurrido:.0f}s) activos: {activos}")
+    except Exception as e:
+        logger.debug(f"/api/ps error: {e}")
+else:
+    logger.warning(
+        f"Timeout ({_poll_timeout}s) esperando descarga de '{_vl_model}'. "
+        "El proceso principal continúa — puede haber contención de VRAM."
+    )
+
 logger.info("Worker finalizado.")
