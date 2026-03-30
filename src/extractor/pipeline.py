@@ -267,12 +267,27 @@ def _filtrar_registros_vacios(
     return filtrados
 
 
+def _extraer_numero_de_string(s: str) -> int | None:
+    """
+    Extrae el primer número entero de un string como "48 meses" → 48.
+    Retorna None si no hay número o si el string es demasiado largo
+    (no es un campo de cantidad, sino texto libre).
+    """
+    if len(s) > 30:  # textos largos no son cantidades
+        return None
+    m = re.match(r"(\d+)", s.strip())
+    return int(m.group(1)) if m else None
+
+
 def _merge_deep(base: dict, nuevo: dict) -> dict:
     """
     Fusiona dos dicts: campos no-nulos de 'nuevo' rellenan los nulos de 'base'.
     Para sub-dicts (experiencia_minima, capacitacion), fusiona recursivamente.
     Para listas, conserva la más larga.
     Para strings, si ambos son no-nulos conserva el más largo (más informativo).
+    Para numéricos, conserva el mayor (en licitaciones, el requisito mínimo
+    real nunca es menor al encontrado — si un bloque garbled dice 24 y el
+    bloque VL limpio dice 48, el correcto es 48).
     """
     resultado = dict(base)
     for k, v in nuevo.items():
@@ -286,10 +301,22 @@ def _merge_deep(base: dict, nuevo: dict) -> dict:
                 resultado[k] = v
         elif _es_nulo(base_v) and not _es_nulo(v):
             resultado[k] = v
+        elif (isinstance(base_v, (int, float)) and isinstance(v, (int, float))
+              and not _es_nulo(base_v) and not _es_nulo(v)):
+            # Preferir el valor mayor (requisitos mínimos en licitaciones)
+            if v > base_v:
+                resultado[k] = v
         elif (isinstance(base_v, str) and isinstance(v, str)
               and not _es_nulo(base_v) and not _es_nulo(v)):
-            # Preferir string más largo (más informativo)
-            if len(v) > len(base_v):
+            # Para strings con cantidades numéricas ("48 meses" vs "24 meses"),
+            # preferir el valor mayor (requisito mínimo real)
+            num_base = _extraer_numero_de_string(base_v)
+            num_nuevo = _extraer_numero_de_string(v)
+            if num_base is not None and num_nuevo is not None:
+                if num_nuevo > num_base:
+                    resultado[k] = v
+            elif len(v) > len(base_v):
+                # Preferir string más largo (más informativo)
                 resultado[k] = v
     return resultado
 

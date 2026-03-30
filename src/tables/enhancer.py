@@ -36,6 +36,10 @@ from src.config.settings import (
 
 logger = logging.getLogger(__name__)
 
+# Diagnósticos VL del último worker — incluye resultados fallidos con markdown crudo.
+# Se llena al terminar _ejecutar_worker y se usa en _guardar_debug_vl.
+_DIAGNOSTICOS_VL: list[dict] = []
+
 # Directorio raíz del proyecto (dos niveles sobre src/tables/)
 _PROJECT_ROOT = str(Path(__file__).parent.parent.parent)
 _WORKER_PATH  = str(Path(__file__).parent / "qwen_vl_worker.py")
@@ -211,17 +215,28 @@ def _ejecutar_worker(
             )
 
         # Leer resultados aunque el returncode sea != 0 (puede haber resultados parciales)
+        reemplazos: dict[int, str] = {}
         if os.path.exists(tmp_pkl) and os.path.getsize(tmp_pkl) > 0:
             with open(tmp_pkl, "rb") as f:
-                reemplazos: dict[int, str] = pickle.load(f)
+                reemplazos = pickle.load(f)
             logger.info(
                 f"[enhancer] Worker completado — "
                 f"{len(reemplazos)} grupo(s) con tabla válida"
             )
-            return reemplazos
         else:
             logger.warning("[enhancer] Worker no produjo resultados")
-            return {}
+
+        # Leer diagnósticos (incluye resultados fallidos con markdown crudo)
+        diag_pkl = tmp_pkl.replace(".pkl", "_diag.pkl") if tmp_pkl else None
+        if diag_pkl and os.path.exists(diag_pkl) and os.path.getsize(diag_pkl) > 0:
+            with open(diag_pkl, "rb") as f:
+                self_diagnosticos_vl = pickle.load(f)
+            # Guardar en variable de módulo para que _guardar_debug_vl lo use
+            _DIAGNOSTICOS_VL.clear()
+            _DIAGNOSTICOS_VL.extend(self_diagnosticos_vl)
+            logger.info(f"[enhancer] {len(self_diagnosticos_vl)} diagnósticos VL cargados")
+
+        return reemplazos
 
     except Exception as e:
         logger.error(f"[enhancer] Error ejecutando worker: {e}")
@@ -231,6 +246,14 @@ def _ejecutar_worker(
             if path and os.path.exists(path):
                 try:
                     os.unlink(path)
+                except OSError:
+                    pass
+        # Limpiar también el archivo de diagnósticos
+        if tmp_pkl:
+            diag_path = tmp_pkl.replace(".pkl", "_diag.pkl")
+            if os.path.exists(diag_path):
+                try:
+                    os.unlink(diag_path)
                 except OSError:
                     pass
 
@@ -352,23 +375,34 @@ def _guardar_debug_vl(
     textos_por_pagina: dict[int, str],
 ) -> None:
     """
-    Escribe output/vl_tablas_debug.md con el markdown crudo de Qwen VL.
+    Escribe output/vl_tablas_debug.md con el markdown crudo de Qwen VL
+    para TODOS los grupos — incluidos los que fallaron validación.
 
     Permite verificar visualmente:
-    - Qué tabla generó VL para cada grupo de páginas
-    - Si faltan filas (profesionales no capturados)
-    - Si el texto OCR original fue reemplazado correctamente
+    - Qué tabla generó VL para cada grupo
+    - Por qué falló la validación (score, varianza, columnas)
+    - Si el markdown crudo tenía datos útiles que se descartaron
     """
     from datetime import datetime
     from src.config.settings import OUTPUT_DIR
 
     output_path = OUTPUT_DIR / "vl_tablas_debug.md"
+
+    # Indexar diagnósticos por primera página del grupo
+    diag_por_grupo: dict[int, dict] = {}
+    for d in _DIAGNOSTICOS_VL:
+        if d.get("paginas"):
+            diag_por_grupo[d["paginas"][0]] = d
+
     try:
+        n_ok = sum(1 for d in _DIAGNOSTICOS_VL if d.get("validado"))
+        n_fail = len(_DIAGNOSTICOS_VL) - n_ok
+
         lineas = [
             f"# Debug Tablas VL — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             f"**Grupos procesados:** {len(grupos)}",
-            f"**Grupos con resultado:** {len(reemplazos)}",
+            f"**Validados:** {n_ok} · **Fallidos:** {n_fail}",
             "",
             "---",
             "",
@@ -376,27 +410,55 @@ def _guardar_debug_vl(
 
         for grupo in grupos:
             primera = grupo[0]
+            diag = diag_por_grupo.get(primera, {})
+            validado = diag.get("validado", False)
+            score = diag.get("score", 0.0)
+            md_crudo = diag.get("markdown")
+            razon = diag.get("razon", "sin datos")
+            n_filas = diag.get("num_filas", 0)
+            n_cols = diag.get("num_columnas", 0)
+            varianza = diag.get("varianza", 0)
+
             lineas.append(f"## Grupo: páginas {grupo}")
             lineas.append("")
 
-            if primera in reemplazos:
-                md = reemplazos[primera]
-                # Contar filas de tabla (excluyendo header y separator)
+            if validado:
+                md = reemplazos.get(primera, md_crudo or "")
                 filas_datos = [
                     l for l in md.strip().split("\n")
                     if l.strip().startswith("|") and "---" not in l
                 ]
-                # Restar 1 por el header
                 n_datos = max(len(filas_datos) - 1, 0)
-                lineas.append(f"**Estado:** ✅ Validado — {n_datos} filas de datos")
+                lineas.append(f"**Estado:** ✅ Validado")
+                lineas.append(
+                    f"**Score:** {score:.2f} · "
+                    f"**Filas:** {n_datos} · **Cols:** {n_cols} · "
+                    f"**Varianza:** {varianza}"
+                )
                 lineas.append(f"**Chars:** {len(md)}")
                 lineas.append("")
-                lineas.append("### Markdown VL (crudo)")
+                lineas.append("### Markdown VL (aceptado)")
                 lineas.append("```")
                 lineas.append(md)
                 lineas.append("```")
+            elif md_crudo:
+                # VL generó algo pero no pasó validación — MOSTRAR
+                lineas.append(f"**Estado:** ❌ Rechazado")
+                lineas.append(
+                    f"**Score:** {score:.2f} · "
+                    f"**Filas:** {n_filas} · **Cols:** {n_cols} · "
+                    f"**Varianza:** {varianza}"
+                )
+                lineas.append(f"**Razón:** {razon}")
+                lineas.append(f"**Chars:** {len(md_crudo)}")
+                lineas.append("")
+                lineas.append("### Markdown VL (rechazado — crudo)")
+                lineas.append("```")
+                lineas.append(md_crudo)
+                lineas.append("```")
             else:
-                lineas.append("**Estado:** ❌ Sin resultado (VL falló o no pasó validación)")
+                lineas.append(f"**Estado:** ❌ Sin resultado")
+                lineas.append(f"**Razón:** {razon}")
 
             lineas.append("")
 

@@ -25,6 +25,7 @@ import sys
 import json
 import pickle
 import logging
+from dataclasses import dataclass
 
 # ── Configurar sys.path antes de cualquier import del proyecto ────────────────
 project_root = sys.argv[1]
@@ -61,15 +62,42 @@ from src.tables.validator import validar_tabla_markdown
 from src.config.settings import TABLE_VL_MAX_BATCH, TABLE_VALIDATOR_MIN_SCORE
 
 
+@dataclass
+class ResultadoGrupo:
+    """Resultado de procesar un grupo VL — incluye datos aun si falla validación."""
+    paginas: list[int]
+    markdown: str | None       # markdown crudo de Qwen VL (None si VL no devolvió nada)
+    validado: bool
+    score: float
+    num_filas: int
+    num_columnas: int
+    varianza: int
+    razon: str
+
+
 def _procesar_grupo(
     imagenes: list,
     paginas_grupo: list[int],
-) -> str | None:
+) -> tuple[str | None, ResultadoGrupo]:
     """
     Procesa un grupo de imágenes con Qwen VL, con sub-batching si es necesario.
     Valida cada sub-batch individualmente antes de fusionar.
-    Retorna el markdown fusionado, o None si nada pasa validación.
+
+    Retorna (markdown_validado_o_None, diagnostico_completo).
+    El diagnóstico se guarda SIEMPRE, incluso cuando la validación falla.
     """
+    def _hacer_diag(md, val=None, razon=""):
+        return ResultadoGrupo(
+            paginas=paginas_grupo,
+            markdown=md,
+            validado=val.valido if val else False,
+            score=val.score if val else 0.0,
+            num_filas=val.num_filas if val else 0,
+            num_columnas=val.num_columnas if val else 0,
+            varianza=_calcular_varianza(md) if md else 0,
+            razon=val.razon if val else razon,
+        )
+
     if len(imagenes) <= TABLE_VL_MAX_BATCH:
         if len(imagenes) == 1:
             md = leer_tabla_visual(imagenes[0])
@@ -78,14 +106,15 @@ def _procesar_grupo(
 
         if not md or "|" not in md:
             logger.warning(f"Grupo págs {paginas_grupo}: Qwen VL no devolvió tabla")
-            return None
+            return None, _hacer_diag(md, razon="VL no devolvió tabla")
 
         val = validar_tabla_markdown(md, min_score=TABLE_VALIDATOR_MIN_SCORE)
+        diag = _hacer_diag(md, val)
         if not val.valido:
             logger.warning(f"Grupo págs {paginas_grupo} no pasó validación: {val.razon}")
-            return None
+            return None, diag
 
-        return md
+        return md, diag
 
     # Grupo grande → sub-batches
     logger.info(
@@ -117,10 +146,12 @@ def _procesar_grupo(
         sub_resultados.append(md)
 
     if not sub_resultados:
-        return None
+        return None, _hacer_diag(None, razon="Ningún sub-batch pasó validación")
 
     if len(sub_resultados) == 1:
-        return sub_resultados[0]
+        md = sub_resultados[0]
+        val = validar_tabla_markdown(md, min_score=TABLE_VALIDATOR_MIN_SCORE)
+        return md, _hacer_diag(md, val)
 
     # Fusionar: header del primero, filas de los demás
     lineas_finales: list[str] = []
@@ -136,14 +167,26 @@ def _procesar_grupo(
     merged = "\n".join(lineas_finales)
 
     val_merged = validar_tabla_markdown(merged, min_score=TABLE_VALIDATOR_MIN_SCORE)
+    diag = _hacer_diag(merged, val_merged)
     if not val_merged.valido:
         logger.warning(
             f"Resultado fusionado págs {paginas_grupo} no pasó validación: "
             f"{val_merged.razon}"
         )
-        return None
+        return None, diag
 
-    return merged
+    return merged, diag
+
+
+def _calcular_varianza(md: str) -> int:
+    """Calcula varianza de columnas de una tabla markdown."""
+    if not md:
+        return 0
+    lineas = [l.strip() for l in md.strip().split("\n") if "|" in l]
+    data_counts = [l.count("|") for l in lineas if "---" not in l]
+    if not data_counts:
+        return 0
+    return max(data_counts) - min(data_counts)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -166,14 +209,32 @@ except Exception as e:
     sys.exit(0)
 
 resultados: dict[int, str] = {}
+diagnosticos: list[dict] = []
 
 for grupo in grupos:
     imagenes = [img_por_pagina[p] for p in grupo if p in img_por_pagina]
     if not imagenes:
         logger.warning(f"Grupo {grupo}: ninguna imagen disponible")
+        diagnosticos.append({
+            "paginas": grupo, "markdown": None, "validado": False,
+            "score": 0.0, "num_filas": 0, "num_columnas": 0,
+            "varianza": 0, "razon": "Sin imágenes disponibles",
+        })
         continue
 
-    md = _procesar_grupo(imagenes, grupo)
+    md, diag = _procesar_grupo(imagenes, grupo)
+
+    diagnosticos.append({
+        "paginas": diag.paginas,
+        "markdown": diag.markdown,
+        "validado": diag.validado,
+        "score": diag.score,
+        "num_filas": diag.num_filas,
+        "num_columnas": diag.num_columnas,
+        "varianza": diag.varianza,
+        "razon": diag.razon,
+    })
+
     if md is None:
         continue
 
@@ -185,8 +246,15 @@ for grupo in grupos:
 exitosos = len(resultados)
 logger.info(f"Completado: {exitosos} grupo(s) exitoso(s) de {len(grupos)}")
 
+# Guardar resultados validados (formato compatible con enhancer)
 with open(output_pkl_path, "wb") as f:
     pickle.dump(resultados, f)
+
+# Guardar diagnósticos completos (incluye resultados fallidos)
+diag_pkl_path = output_pkl_path.replace(".pkl", "_diag.pkl")
+with open(diag_pkl_path, "wb") as f:
+    pickle.dump(diagnosticos, f)
+logger.info(f"Diagnósticos guardados en {diag_pkl_path}")
 
 # ── Descargar modelo VL de Ollama antes de salir ─────────────────────────────
 # El proceso principal no puede arrancar Qwen 14B hasta que este modelo
