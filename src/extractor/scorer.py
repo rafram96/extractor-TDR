@@ -99,8 +99,16 @@ def group_into_blocks(scored: list[PageScore]) -> list[Block]:
     blocks = []
     for btype, bpages in raw_blocks:
         first, last = bpages[0].page_num, bpages[-1].page_num
-        before = [page_map[n] for n in range(first - SCORER_CONTEXT, first) if n in page_map]
-        after  = [page_map[n] for n in range(last + 1, last + SCORER_CONTEXT + 1) if n in page_map]
-        blocks.append(Block(block_type=btype, pages=before + bpages + after))
+        # Contexto: ±SCORER_CONTEXT páginas alrededor del bloque
+        range_start = first - SCORER_CONTEXT
+        range_end = last + SCORER_CONTEXT
+        # Incluir TODAS las páginas entre range_start y range_end
+        # (no solo las que tienen dominant_type, también las gap pages)
+        all_pages = [
+            page_map[n]
+            for n in range(range_start, range_end + 1)
+            if n in page_map
+        ]
+        blocks.append(Block(block_type=btype, pages=all_pages))
 
     return blocks
