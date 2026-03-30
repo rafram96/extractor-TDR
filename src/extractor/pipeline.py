@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -245,17 +246,35 @@ def extraer_bases(
         "_tablas_stats":       vars(tablas_stats) if tablas_stats else None,
     }
 
-    for block in blocks:
+    t_llm_total = time.perf_counter()
+    for i_block, block in enumerate(blocks, 1):
         resultado["_bloques_detectados"].append({
             "tipo":    block.block_type,
             "paginas": list(block.page_range),
         })
 
+        logger.info(
+            f"[pipeline] Bloque {i_block}/{len(blocks)}: "
+            f"'{block.block_type}' págs {block.page_range} "
+            f"({len(block.text)} chars)"
+        )
+
         # Subdividir bloques grandes para que el LLM no pierda contexto
         sub_blocks = _subdividir_bloque(block)
 
-        for sub_block in sub_blocks:
+        for i_sub, sub_block in enumerate(sub_blocks, 1):
+            if len(sub_blocks) > 1:
+                logger.info(
+                    f"[pipeline]   Sub-bloque {i_sub}/{len(sub_blocks)} "
+                    f"págs {sub_block.page_range} ({len(sub_block.text)} chars)"
+                )
+            t_bloque = time.perf_counter()
             data, llm_diag = extraer_bloque(sub_block)
+            dt = time.perf_counter() - t_bloque
+            logger.info(
+                f"[pipeline]   → {sub_block.block_type} págs {sub_block.page_range}: "
+                f"{'OK' if data else 'VACÍO'} en {dt:.1f}s"
+            )
 
             # Registrar interacción LLM para diagnóstico
             diag.llm_interactions.append(LLMInteraction(
@@ -301,11 +320,13 @@ def extraer_bases(
         resultado["factores_evaluacion"], "factores_evaluacion",
     )
 
+    dt_llm_total = time.perf_counter() - t_llm_total
     logger.info(
         f"[pipeline] Resultado: "
         f"{len(resultado['rtm_postor'])} items postor · "
         f"{len(resultado['rtm_personal'])} profesionales · "
-        f"{len(resultado['factores_evaluacion'])} factores"
+        f"{len(resultado['factores_evaluacion'])} factores · "
+        f"LLM total: {dt_llm_total:.1f}s"
     )
 
     # ── Generar reporte de diagnóstico ────────────────────────────────────

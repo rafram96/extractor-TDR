@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Optional
 
 from openai import OpenAI
@@ -119,12 +120,14 @@ def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
 
     try:
         client = _get_client()
+        t0 = time.perf_counter()
         response = client.chat.completions.create(
             model=QWEN_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=QWEN_MAX_TOKENS,
         )
+        elapsed = time.perf_counter() - t0
     except Exception as e:
         diag["error"] = f"Qwen falló: {e}"
         logger.warning(f"[llm] {diag['error']}")
@@ -132,6 +135,22 @@ def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
 
     raw = response.choices[0].message.content.strip()
     diag["raw_response"] = raw
+
+    # ── Métricas de rendimiento ──────────────────────────────────────────
+    usage = getattr(response, "usage", None)
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+    total_tokens = prompt_tokens + completion_tokens
+    tps = completion_tokens / elapsed if elapsed > 0 and completion_tokens > 0 else 0
+
+    # GPU: ~20-40 tok/s para 14b | CPU/RAM: ~2-5 tok/s
+    dispositivo = "GPU" if tps > 10 else "CPU/RAM" if tps > 0 else "?"
+    logger.info(
+        f"[llm] ✓ '{block.block_type}' págs {block.page_range}: "
+        f"{elapsed:.1f}s · {completion_tokens} tokens · "
+        f"{tps:.1f} tok/s ({dispositivo}) · "
+        f"prompt={prompt_tokens}tok resp={completion_tokens}tok"
+    )
 
     # Detectar respuestas fabricadas ANTES de limpiar/parsear
     if _es_respuesta_fabricada(raw):
