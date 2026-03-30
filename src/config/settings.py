@@ -24,10 +24,12 @@ SCORER_MAX_GAP    = 3     # páginas de gap toleradas dentro de un bloque
 SCORER_CONTEXT    = 1     # páginas de contexto antes/después de cada bloque
 
 # ── Tablas (pipeline híbrido) ────────────────────────────────────────────────
-TABLE_DETECT_THRESHOLD   = 0.4   # score mínimo heurística para pre-filtro
-TABLE_DOCLING_DPI        = 200   # resolución para extracción de imágenes
-TABLE_VALIDATOR_MIN_SCORE = 0.5  # score mínimo para aceptar tabla de Qwen VL
-USE_DOCLING              = False # False = saltar Docling (ahorra ~2GB RAM), usar heurística + Qwen VL
+TABLE_DETECT_THRESHOLD    = 0.4   # score mínimo heurística para pre-filtro
+TABLE_DOCLING_DPI         = 150   # DPI para imágenes (200 generaba payloads de 21MB, fallaba en batches)
+TABLE_VALIDATOR_MIN_SCORE = 0.5   # score mínimo para aceptar tabla de Qwen VL
+TABLE_VL_MAX_BATCH        = 3     # máximo imágenes por llamada a Qwen VL cross-page
+TABLE_VL_MAX_PX           = 900   # máximo px en el lado más largo antes de enviar a VL
+USE_DOCLING               = False # False = saltar Docling, usar heurística + Qwen VL directo
 
 # ── Paths de salida ───────────────────────────────────────────────────────────
 OUTPUT_DIR = Path("output")

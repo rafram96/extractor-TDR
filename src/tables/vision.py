@@ -18,13 +18,27 @@ from src.config.settings import (
     QWEN_VL_MODEL,
     QWEN_VL_TIMEOUT,
     OLLAMA_BASE_URL,
+    TABLE_VL_MAX_PX,
 )
 
 logger = logging.getLogger(__name__)
 
 
+def _redimensionar(imagen: Image.Image, max_px: int = TABLE_VL_MAX_PX) -> Image.Image:
+    """Redimensiona imagen si el lado más largo supera max_px."""
+    w, h = imagen.size
+    lado_max = max(w, h)
+    if lado_max <= max_px:
+        return imagen
+    escala = max_px / lado_max
+    nuevo_w = int(w * escala)
+    nuevo_h = int(h * escala)
+    return imagen.resize((nuevo_w, nuevo_h), Image.LANCZOS)
+
+
 def _imagen_a_base64(imagen: Image.Image) -> str:
-    """Convierte imagen PIL a base64 para enviar a Ollama."""
+    """Redimensiona y convierte imagen PIL a base64 para enviar a Ollama."""
+    imagen = _redimensionar(imagen)
     buffer = io.BytesIO()
     imagen.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("utf-8")

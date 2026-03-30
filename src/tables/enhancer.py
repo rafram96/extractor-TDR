@@ -16,7 +16,10 @@ from src.tables.docling_client import confirmar_tablas, check_docling_available,
 from src.tables.image_utils import extraer_multiples_paginas, crop_tabla, PaginaImagen
 from src.tables.vision import leer_tabla_visual, leer_tabla_crosspage
 from src.tables.validator import validar_tabla_markdown
-from src.config.settings import TABLE_DETECT_THRESHOLD, TABLE_VALIDATOR_MIN_SCORE, USE_DOCLING
+from src.config.settings import (
+    TABLE_DETECT_THRESHOLD, TABLE_VALIDATOR_MIN_SCORE,
+    USE_DOCLING, TABLE_VL_MAX_BATCH,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,12 +172,19 @@ def mejorar_texto_con_tablas(
         if not imagenes_crop:
             continue
 
-        # Llamar a Qwen VL
+        # Llamar a Qwen VL — respetar límite de batch
         stats.tablas_qwen_vl += 1
         if len(imagenes_crop) == 1:
             md_tabla = leer_tabla_visual(imagenes_crop[0])
-        else:
+        elif len(imagenes_crop) <= TABLE_VL_MAX_BATCH:
             md_tabla = leer_tabla_crosspage(imagenes_crop)
+        else:
+            # Grupo demasiado grande: procesar en sub-batches y concatenar
+            logger.info(
+                f"[enhancer] Grupo de {len(imagenes_crop)} imgs → "
+                f"procesando en sub-batches de {TABLE_VL_MAX_BATCH}"
+            )
+            md_tabla = _procesar_en_batches(imagenes_crop, paginas_grupo)
 
         if md_tabla is None:
             logger.warning(
@@ -383,3 +393,58 @@ def _insertar_tabla_en_texto(texto_original: str, tabla_md: str) -> str:
         partes.append(despues)
 
     return "\n\n".join(partes)
+
+
+def _procesar_en_batches(
+    imagenes: list,
+    paginas: list[int],
+) -> str | None:
+    """
+    Procesa un grupo grande de imágenes en sub-batches de TABLE_VL_MAX_BATCH.
+    Concatena los resultados parciales en una sola tabla markdown.
+
+    Para tablas cross-page muy largas (ej: 8 páginas), las divide en bloques
+    de máximo TABLE_VL_MAX_BATCH imágenes y fusiona los markdowns resultantes.
+    """
+    resultados: list[str] = []
+
+    for i in range(0, len(imagenes), TABLE_VL_MAX_BATCH):
+        sub_imgs = imagenes[i:i + TABLE_VL_MAX_BATCH]
+        sub_pags = paginas[i:i + TABLE_VL_MAX_BATCH]
+
+        logger.info(
+            f"[enhancer] Sub-batch {i // TABLE_VL_MAX_BATCH + 1}: "
+            f"págs {sub_pags}"
+        )
+
+        if len(sub_imgs) == 1:
+            md = leer_tabla_visual(sub_imgs[0])
+        else:
+            md = leer_tabla_crosspage(sub_imgs)
+
+        if md and "|" in md:
+            resultados.append(md)
+        else:
+            logger.warning(
+                f"[enhancer] Sub-batch págs {sub_pags} no devolvió tabla válida"
+            )
+
+    if not resultados:
+        return None
+
+    if len(resultados) == 1:
+        return resultados[0]
+
+    # Fusionar: conservar header del primero, omitir headers repetidos
+    lineas_finales: list[str] = []
+    for idx, md in enumerate(resultados):
+        lineas = [l for l in md.strip().split("\n") if l.strip()]
+        if idx == 0:
+            lineas_finales.extend(lineas)
+        else:
+            # Saltar header (primera línea) y separador (segunda línea con ---)
+            for linea in lineas:
+                if linea.strip().startswith("|") and "---" not in linea:
+                    lineas_finales.append(linea)
+
+    return "\n".join(lineas_finales)

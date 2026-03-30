@@ -75,6 +75,10 @@ def _descargar_modelo_ollama():
             timeout=10,
         )
         logger.info(f"[pipeline] Modelo '{QWEN_VL_MODEL}' descargado de VRAM")
+        # Ollama libera VRAM de forma asíncrona — esperar antes de cargar 14b
+        import time
+        time.sleep(6)
+        logger.info("[pipeline] VRAM liberada, iniciando extracción con Qwen 14B")
     except Exception as e:
         logger.warning(f"[pipeline] No se pudo descargar '{QWEN_VL_MODEL}': {e}")
 
@@ -217,7 +221,12 @@ def extraer_bases(
     if pdf_path:
         try:
             from src.tables.enhancer import mejorar_texto_con_tablas
-            paginas_relevantes = [p.page_num for p in scored if p.dominant_type]
+            # Usar todas las páginas de los bloques (incluye gap pages como 39,40
+            # y páginas con heurística baja que sí están dentro de bloques importantes)
+            _bloques_pre = group_into_blocks(scored)
+            paginas_relevantes = sorted({
+                p.page_num for b in _bloques_pre for p in b.pages
+            })
             full_text, tablas_stats = mejorar_texto_con_tablas(
                 full_text, pdf_path, paginas_relevantes,
             )
