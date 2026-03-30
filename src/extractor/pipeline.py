@@ -46,8 +46,10 @@ def _subdividir_bloque(block: Block) -> list[Block]:
 
         if sub_pages:
             sub_bloques.append(Block(block_type=block.block_type, pages=sub_pages))
-            # Retroceder para solapamiento
-            i -= _OVERLAP_PAGES
+            # Retroceder para solapamiento, pero solo si avanzamos más de
+            # _OVERLAP_PAGES páginas — sino es loop infinito
+            if len(sub_pages) > _OVERLAP_PAGES:
+                i -= _OVERLAP_PAGES
 
     if sub_bloques:
         n_pages = [len(sb.pages) for sb in sub_bloques]

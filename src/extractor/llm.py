@@ -145,14 +145,14 @@ def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
     prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
     completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
     total_tokens = prompt_tokens + completion_tokens
-    tps = completion_tokens / elapsed if elapsed > 0 and completion_tokens > 0 else 0
 
-    # GPU: ~20-40 tok/s para 14b | CPU/RAM: ~2-5 tok/s
-    dispositivo = "GPU" if tps > 10 else "CPU/RAM" if tps > 0 else "?"
+    # Velocidad de prefill (prompt processing) — indicador real de GPU vs CPU
+    # GPU 14b: ~300-1000 tok/s prefill | CPU/RAM: ~30-100 tok/s
+    prefill_tps = prompt_tokens / elapsed if elapsed > 0 and prompt_tokens > 0 else 0
+    dispositivo = "GPU" if prefill_tps > 200 else "CPU/RAM" if prefill_tps > 0 else "?"
     logger.info(
         f"[llm] ✓ '{block.block_type}' págs {block.page_range}: "
-        f"{elapsed:.1f}s · {completion_tokens} tokens · "
-        f"{tps:.1f} tok/s ({dispositivo}) · "
+        f"{elapsed:.1f}s · prefill={prefill_tps:.0f} tok/s ({dispositivo}) · "
         f"prompt={prompt_tokens}tok resp={completion_tokens}tok"
     )
 
