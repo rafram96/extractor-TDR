@@ -59,6 +59,26 @@ def _subdividir_bloque(block: Block) -> list[Block]:
     return sub_bloques
 
 
+def _descargar_modelo_ollama():
+    """
+    Descarga el modelo VL de Ollama para liberar VRAM
+    antes de que se cargue Qwen 14B para extracción.
+    Evita que ambos modelos estén en memoria simultáneamente.
+    """
+    import requests
+    from src.config.settings import OLLAMA_BASE_URL, QWEN_VL_MODEL
+    try:
+        # keep_alive=0 le dice a Ollama que descargue el modelo inmediatamente
+        requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": QWEN_VL_MODEL, "keep_alive": 0},
+            timeout=10,
+        )
+        logger.info(f"[pipeline] Modelo '{QWEN_VL_MODEL}' descargado de VRAM")
+    except Exception as e:
+        logger.warning(f"[pipeline] No se pudo descargar '{QWEN_VL_MODEL}': {e}")
+
+
 def _es_nulo(valor: Any) -> bool:
     """True si el valor es None, string vacío o string literal 'null'."""
     if valor is None:
@@ -191,6 +211,8 @@ def extraer_bases(
     scored = [score_page(p) for p in pages]
 
     # ── Mejora de tablas (antes de agrupar bloques) ──────────────────────
+    #    FASE VL: usa Qwen VL para leer tablas visualmente.
+    #    Al terminar, descarga VL de Ollama para liberar VRAM antes de Qwen 14B.
     tablas_stats = None
     if pdf_path:
         try:
@@ -202,6 +224,10 @@ def extraer_bases(
             # Re-parsear con el texto mejorado
             pages = parse_full_text(full_text)
             scored = [score_page(p) for p in pages]
+
+            # ── Descargar modelo VL de Ollama para liberar VRAM ──
+            _descargar_modelo_ollama()
+
         except ImportError as e:
             logger.warning(f"[pipeline] Módulo tables no disponible ({e}), saltando mejora de tablas")
         except Exception as e:
