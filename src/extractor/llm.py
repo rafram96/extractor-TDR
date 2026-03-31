@@ -73,6 +73,45 @@ _FABRICATION_PATTERNS = [
 ]
 
 
+def _reparar_json(raw: str) -> Optional[dict]:
+    """
+    Intenta reparar JSON malformado del LLM.
+
+    Reparaciones (en orden):
+    1. Coma faltante entre objetos: }{ → },{
+    2. Coma faltante entre valor y llave: "valor"  "llave" → "valor", "llave"
+    3. Comas trailing antes de cierre: ,} → }  ,] → ]
+    4. Cerrar brackets/braces sin cerrar
+    """
+    # 1. Coma faltante entre objetos en arrays: } { o }\n{
+    fixed = re.sub(r"\}\s*\{", "},{", raw)
+
+    # 2. Coma faltante entre string/number y nueva key:
+    #    "valor"  "key"  →  "valor", "key"
+    #    123  "key"      →  123, "key"
+    #    null  "key"     →  null, "key"
+    #    true  "key"     →  true, "key"
+    fixed = re.sub(
+        r'("|\d|null|true|false)\s*\n\s*"', r'\1,\n"', fixed
+    )
+
+    # 3. Trailing commas
+    fixed = re.sub(r",\s*([}\]])", r"\1", fixed)
+
+    # 4. Cerrar brackets/braces sin cerrar
+    open_braces = fixed.count("{") - fixed.count("}")
+    open_brackets = fixed.count("[") - fixed.count("]")
+    if open_braces > 0:
+        fixed = fixed.rstrip() + "}" * open_braces
+    if open_brackets > 0:
+        fixed = fixed.rstrip() + "]" * open_brackets
+
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        return None
+
+
 def _es_respuesta_fabricada(raw_response: str) -> bool:
     """Detecta si el LLM generó un 'ejemplo' en vez de extraer datos reales."""
     texto = raw_response.lower()
@@ -198,6 +237,32 @@ def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
 
         return result, diag
     except json.JSONDecodeError as e:
-        diag["error"] = f"JSON inválido: {e} — raw: {raw[:200]!r}"
+        logger.warning(
+            f"[llm] JSON inválido en '{block.block_type}' págs {block.page_range}: {e}"
+        )
+        # Intentar reparación automática
+        repaired = _reparar_json(raw)
+        if repaired is not None:
+            logger.info(
+                f"[llm] ✓ JSON reparado para '{block.block_type}' págs {block.page_range}"
+            )
+            repaired["_meta"] = {
+                "block_type": block.block_type,
+                "page_range": list(block.page_range),
+            }
+            diag["parsed_ok"] = True
+            diag["parsed_keys"] = [k for k in repaired.keys() if not k.startswith("_")]
+            diag["error"] = f"JSON reparado (error original: {e})"
+
+            if block.block_type == "rtm_postor":
+                diag["items_extracted"] = len(repaired.get("items_concurso", []))
+            elif block.block_type == "rtm_personal":
+                diag["items_extracted"] = len(repaired.get("personal_clave", []))
+            elif block.block_type == "factores_evaluacion":
+                diag["items_extracted"] = len(repaired.get("factores_evaluacion", []))
+
+            return repaired, diag
+
+        diag["error"] = f"JSON inválido (reparación falló): {e} — raw: {raw[:200]!r}"
         logger.warning(f"[llm] {diag['error']}")
         return None, diag
