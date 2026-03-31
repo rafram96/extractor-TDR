@@ -38,10 +38,13 @@ def _redimensionar(imagen: Image.Image, max_px: int = TABLE_VL_MAX_PX) -> Image.
 
 
 def _imagen_a_base64(imagen: Image.Image) -> str:
-    """Redimensiona y convierte imagen PIL a base64 para enviar a Ollama."""
+    """Redimensiona y convierte imagen PIL a base64 JPEG para enviar a Ollama."""
     imagen = _redimensionar(imagen)
+    # Convertir a RGB si tiene canal alpha (JPEG no soporta transparencia)
+    if imagen.mode in ("RGBA", "LA", "P"):
+        imagen = imagen.convert("RGB")
     buffer = io.BytesIO()
-    imagen.save(buffer, format="PNG")
+    imagen.save(buffer, format="JPEG", quality=85)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
@@ -131,7 +134,8 @@ def _llamar_qwen_vl(
         "stream": False,
         "options": {
             "temperature": 0,
-            "num_predict": 4096,
+            "num_predict": 2048,
+            "num_ctx": 8192,
         },
     }
 
