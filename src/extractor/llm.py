@@ -156,8 +156,13 @@ def extraer_bloque(block: Block) -> tuple[Optional[dict], dict]:
         f"prompt={prompt_tokens}tok resp={completion_tokens}tok"
     )
 
-    # Detectar respuestas fabricadas ANTES de limpiar/parsear
-    if _es_respuesta_fabricada(raw):
+    # Detectar respuestas fabricadas en el preámbulo (texto ANTES del JSON).
+    # No se verifica el JSON completo porque los valores extraídos del documento
+    # pueden contener legítimamente palabras como "ejemplo" en las descripciones.
+    # El LLM a veces añade un párrafo meta-comentario DESPUÉS del JSON válido
+    # ("Este es un ejemplo para el primer cargo...") que no debe descartar el resultado.
+    _pre_json = raw[: raw.find("{")] if "{" in raw else raw
+    if _es_respuesta_fabricada(_pre_json):
         diag["error"] = "Respuesta fabricada detectada (ejemplo/plantilla)"
         logger.warning(
             f"[llm] Bloque '{block.block_type}' págs {block.page_range}: "

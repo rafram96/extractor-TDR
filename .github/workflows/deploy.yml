@@ -1,0 +1,21 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Sincronizar dependencias
+        run: uv sync
+        shell: powershell
+
+      - name: Restart servicio
+        run: nssm restart InfoObras-ExtractorTDR
+        shell: powershell
