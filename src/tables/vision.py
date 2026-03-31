@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import time
 from typing import Optional
 
 import requests
@@ -134,37 +135,52 @@ def _llamar_qwen_vl(
         },
     }
 
-    try:
-        resp = requests.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
-            timeout=QWEN_VL_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    max_reintentos = 2
+    for intento in range(max_reintentos + 1):
+        try:
+            resp = requests.post(
+                f"{OLLAMA_BASE_URL}/api/chat",
+                json=payload,
+                timeout=QWEN_VL_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-        contenido = data.get("message", {}).get("content", "").strip()
+            contenido = data.get("message", {}).get("content", "").strip()
 
-        # Limpiar bloques markdown (```markdown ... ```)
-        if contenido.startswith("```"):
-            lineas = contenido.split("\n")
-            # Remover primera y última línea si son ```
-            if lineas[0].startswith("```"):
-                lineas = lineas[1:]
-            if lineas and lineas[-1].strip() == "```":
-                lineas = lineas[:-1]
-            contenido = "\n".join(lineas).strip()
+            # Limpiar bloques markdown (```markdown ... ```)
+            if contenido.startswith("```"):
+                lineas = contenido.split("\n")
+                # Remover primera y última línea si son ```
+                if lineas[0].startswith("```"):
+                    lineas = lineas[1:]
+                if lineas and lineas[-1].strip() == "```":
+                    lineas = lineas[:-1]
+                contenido = "\n".join(lineas).strip()
 
-        if "|" not in contenido:
-            logger.warning("[qwen-vl] Respuesta no contiene tabla markdown")
+            if "|" not in contenido:
+                logger.warning("[qwen-vl] Respuesta no contiene tabla markdown")
+                return None
+
+            logger.info(f"[qwen-vl] Tabla recibida: {len(contenido)} chars")
+            return contenido
+
+        except requests.Timeout:
+            logger.error(f"[qwen-vl] Timeout después de {QWEN_VL_TIMEOUT}s")
+            return None
+        except requests.HTTPError as e:
+            if resp.status_code == 500 and intento < max_reintentos:
+                wait = 5 * (intento + 1)
+                logger.warning(
+                    f"[qwen-vl] 500 en intento {intento + 1}/{max_reintentos + 1}, "
+                    f"reintentando en {wait}s..."
+                )
+                time.sleep(wait)
+                continue
+            logger.error(f"[qwen-vl] Error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"[qwen-vl] Error: {e}")
             return None
 
-        logger.info(f"[qwen-vl] Tabla recibida: {len(contenido)} chars")
-        return contenido
-
-    except requests.Timeout:
-        logger.error(f"[qwen-vl] Timeout después de {QWEN_VL_TIMEOUT}s")
-        return None
-    except Exception as e:
-        logger.error(f"[qwen-vl] Error: {e}")
-        return None
+    return None
