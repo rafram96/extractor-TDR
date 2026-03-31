@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.extractor.parser import parse_full_text
-from src.extractor.scorer import score_page, group_into_blocks, Block
+from src.extractor.scorer import score_page, group_into_blocks, Block, PageScore
 from src.extractor.llm import extraer_bloque
 from src.extractor.report import (
     DiagnosticData, LLMInteraction, generar_reporte,
@@ -84,6 +84,15 @@ def _es_pagina_tabla_vl(text: str) -> bool:
     return len(lineas_tabla) >= 5 and len(lineas_tabla) / len(lineas) > 0.6
 
 
+def _contar_items_tabla_vl(text: str) -> int:
+    """Cuenta filas de datos en una tabla VL (filas que comienzan con | N |)."""
+    count = 0
+    for line in text.split("\n"):
+        if re.match(r"\s*\|\s*\d+\s*\|", line):
+            count += 1
+    return count
+
+
 def _subdividir_bloque(block: Block) -> list[Block]:
     """
     Si un bloque supera _MAX_BLOCK_CHARS, lo divide en sub-bloques
@@ -99,7 +108,7 @@ def _subdividir_bloque(block: Block) -> list[Block]:
     al LLM, mientras que las tablas B.1 (descripciones enormes de 500+
     chars por celda) se comprimen para no reventar el contexto.
     """
-    from src.extractor.scorer import PageScore
+
 
     # ── 1. Detectar páginas VL ANTES de cualquier compresión ────────────
     paginas_vl = []
@@ -344,11 +353,6 @@ def _normalizar_cargo(cargo: str) -> str:
     """
     texto = cargo.strip()
 
-    # -1. Cargos BIM: todas las variantes (Gestor BIM, Coordinador BIM, Líder BIM,
-    #     BIM Manager, Supervisor BIM) representan el mismo cargo en OSCE.
-    if re.search(r"\bbim\b", texto, re.IGNORECASE):
-        return "gestor bim"
-
     # 0. Caso especial: cargos con "en la especialidad de X"
     #    El LLM a veces genera cargos largos tipo:
     #    "Especialista en desarrollo y/o elaboración y/o supervisión y/o
@@ -359,6 +363,24 @@ def _normalizar_cargo(cargo: str) -> str:
     )
     if m_esp:
         especialidad = m_esp.group(1).strip().lower()
+        # Tomar primera alternativa antes de "y/o"
+        # Ej: "Comunicaciones y/o Seguridad Electrónica" → "comunicaciones"
+        especialidad = re.split(r"\s+y/o\s+", especialidad, maxsplit=1)[0].strip()
+        return f"especialista en {especialidad}"
+
+    # 0b. "Especialista en Instalaciones de X" → "especialista en X"
+    #     Normaliza variantes como "Instalaciones de Comunicaciones, seg. electrónica..."
+    #     para que coincidan con formas extraídas por step 0 ("especialidad de Comunicaciones").
+    #     Solo aplica cuando hay "de" entre "Instalaciones" y la especialidad.
+    #     "Instalaciones Eléctricas" / "Instalaciones Sanitarias" (sin "de") no son afectadas.
+    m_inst = re.match(
+        r"^Especialista\s+en\s+Instalaciones\s+de\s+(.+)$",
+        texto, re.IGNORECASE,
+    )
+    if m_inst:
+        especialidad = m_inst.group(1).strip().lower()
+        # Tomar primera parte antes de coma o "y/o"
+        especialidad = re.split(r",\s*|\s+y/o\s+", especialidad, maxsplit=1)[0].strip()
         return f"especialista en {especialidad}"
 
     # 1. Tomar primera alternativa de "X y/o Y y/o Z"
@@ -904,6 +926,33 @@ def extraer_bases(
                 len(sub_block.pages) == 1
                 and _es_pagina_tabla_vl(sub_block.pages[0].text)
             )
+
+            # Inyectar conteo de ítems para sub-bloques VL — evita que el LLM
+            # salte ítems del medio de la tabla (patrón "skip middle items").
+            if es_sub_vl:
+                n_items = _contar_items_tabla_vl(sub_block.pages[0].text)
+                if n_items >= 3:
+                    nota = (
+                        f"NOTA: La tabla tiene {n_items} ítems de personal clave "
+                        f"(numerados del 1 al {n_items}). "
+                        f"Extrae TODOS los {n_items}, uno por uno en orden. "
+                        f"No omitas ningún ítem."
+                    )
+                
+                    p = sub_block.pages[0]
+                    p_mod = PageScore(
+                        page_num=p.page_num,
+                        confidence=p.confidence,
+                        text=nota + "\n\n" + p.text,
+                        scores=p.scores,
+                    )
+                    sub_block = Block(
+                        block_type=sub_block.block_type, pages=[p_mod],
+                    )
+                    logger.info(
+                        f"[pipeline]   VL: {n_items} ítems detectados en tabla, "
+                        f"instrucción inyectada"
+                    )
 
             if len(sub_blocks) > 1:
                 tag_vl = " [VL]" if es_sub_vl else ""
