@@ -108,11 +108,14 @@ def _llamar_qwen_vl(
 
     Ollama /api/chat soporta imágenes como base64 en el campo "images".
     """
+    imgs_resized = [_redimensionar(img) for img in imagenes]
     images_b64 = [_imagen_a_base64(img) for img in imagenes]
 
+    px_orig = sum(img.width * img.height for img in imagenes)
+    px_resized = sum(img.width * img.height for img in imgs_resized)
     logger.info(
         f"[qwen-vl] Enviando {len(imagenes)} imagen(es) "
-        f"({sum(img.width * img.height for img in imagenes)} px total)"
+        f"({px_orig} px orig → {px_resized} px resized)"
     )
 
     payload = {

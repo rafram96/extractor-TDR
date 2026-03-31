@@ -75,6 +75,44 @@ class ResultadoGrupo:
     razon: str
 
 
+def _fallback_individual(
+    imagenes: list,
+    paginas_grupo: list[int],
+) -> str | None:
+    """
+    Fallback: procesa cada imagen individualmente y fusiona los markdowns.
+    Se usa cuando el batch multi-imagen falla (típicamente OOM en GPU).
+    """
+    partes: list[str] = []
+    for i, img in enumerate(imagenes):
+        pag = paginas_grupo[i] if i < len(paginas_grupo) else "?"
+        logger.info(f"  Fallback individual: pág {pag}")
+        md = leer_tabla_visual(img)
+        if md and "|" in md:
+            partes.append(md)
+        else:
+            logger.warning(f"  Fallback pág {pag}: sin resultado")
+
+    if not partes:
+        return None
+
+    if len(partes) == 1:
+        return partes[0]
+
+    # Fusionar: header del primero, filas de datos de los demás
+    lineas_finales: list[str] = []
+    for idx, md in enumerate(partes):
+        lineas = [l for l in md.strip().split("\n") if l.strip()]
+        if idx == 0:
+            lineas_finales.extend(lineas)
+        else:
+            for linea in lineas:
+                if linea.strip().startswith("|") and "---" not in linea:
+                    lineas_finales.append(linea)
+
+    return "\n".join(lineas_finales)
+
+
 def _procesar_grupo(
     imagenes: list,
     paginas_grupo: list[int],
@@ -103,6 +141,14 @@ def _procesar_grupo(
             md = leer_tabla_visual(imagenes[0])
         else:
             md = leer_tabla_crosspage(imagenes)
+
+        # Si el batch multi-imagen falló, fallback a imágenes individuales
+        if (not md or "|" not in md) and len(imagenes) > 1:
+            logger.warning(
+                f"Grupo págs {paginas_grupo}: batch de {len(imagenes)} falló, "
+                f"reintentando imagen por imagen"
+            )
+            md = _fallback_individual(imagenes, paginas_grupo)
 
         if not md or "|" not in md:
             logger.warning(f"Grupo págs {paginas_grupo}: Qwen VL no devolvió tabla")
@@ -133,6 +179,13 @@ def _procesar_grupo(
             md = leer_tabla_visual(sub_imgs[0])
         else:
             md = leer_tabla_crosspage(sub_imgs)
+
+        # Fallback individual si el sub-batch multi-imagen falló
+        if (not md or "|" not in md) and len(sub_imgs) > 1:
+            logger.warning(
+                f"Sub-batch págs {sub_pags}: batch falló, reintentando individual"
+            )
+            md = _fallback_individual(sub_imgs, sub_pags)
 
         if not md or "|" not in md:
             logger.warning(f"Sub-batch págs {sub_pags}: no devolvió tabla")
