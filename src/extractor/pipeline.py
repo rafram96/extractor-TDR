@@ -344,6 +344,11 @@ def _normalizar_cargo(cargo: str) -> str:
     """
     texto = cargo.strip()
 
+    # -1. Cargos BIM: todas las variantes (Gestor BIM, Coordinador BIM, Líder BIM,
+    #     BIM Manager, Supervisor BIM) representan el mismo cargo en OSCE.
+    if re.search(r"\bbim\b", texto, re.IGNORECASE):
+        return "gestor bim"
+
     # 0. Caso especial: cargos con "en la especialidad de X"
     #    El LLM a veces genera cargos largos tipo:
     #    "Especialista en desarrollo y/o elaboración y/o supervisión y/o
@@ -359,16 +364,6 @@ def _normalizar_cargo(cargo: str) -> str:
     # 1. Tomar primera alternativa de "X y/o Y y/o Z"
     base = re.split(r"\s+y/o\s+", texto, maxsplit=1)[0].strip()
 
-    # 1b. Strip "de"/"del" that connects a role word to a specialty name
-    #     "Gestor de BIM" → "Gestor BIM"
-    #     "Director del Proyecto" is also stripped, which is fine for dedup purposes.
-    #     Aplica solo a palabras de rol OSCE estándar para no alterar "Especialista en X".
-    base = re.sub(
-        r"^(Gestor|Director|Gerente|Coordinador|Jefe|L[ií]der|Supervisor"
-        r"|Responsable|Encargado|Administrador|Representante)\s+de(?:l)?\s+",
-        r"\1 ", base, flags=re.IGNORECASE,
-    )
-
     # 2. Quitar frases de acción tras el cargo base:
     #    "de elaboración del expediente técnico" → ""
     #    "en la elaboración de expedientes" → ""
@@ -377,6 +372,17 @@ def _normalizar_cargo(cargo: str) -> str:
         r"\s+(?:de|en)\s+(?:la\s+)?(?:elaboración|desarrollo|supervisión|diseño)"
         r"(?:\s+\S+)*$",
         "", base, flags=re.IGNORECASE,
+    )
+
+    # 2b. Strip "de"/"del" that connects a role word to a specialty name
+    #     "Gestor de BIM" → "Gestor BIM"
+    #     "Director del Proyecto" is also stripped, which is fine for dedup purposes.
+    #     Aplica DESPUÉS del paso 2 para que "Jefe de elaboración..." ya haya sido
+    #     reducido a "Jefe" y este paso sea no-op en ese caso.
+    base = re.sub(
+        r"^(Gestor|Director|Gerente|Coordinador|Jefe|L[ií]der|Supervisor"
+        r"|Responsable|Encargado|Administrador|Representante)\s+de(?:l)?\s+",
+        r"\1 ", base, flags=re.IGNORECASE,
     )
 
     return base.strip().lower()
@@ -507,6 +513,55 @@ def _filtrar_asistentes(lista: list[dict]) -> list[dict]:
         logger.info(
             f"[filtro] {descartados} Asistente(s) descartado(s) "
             f"(sección TDR, no personal clave)"
+        )
+    return resultado
+
+
+# Patrones que identifican cargos genéricos de la sección funcional TDR,
+# no del cuadro de personal clave B.1/B.2.
+# "Consultoría" y "Consultor de Ingeniería" son meta-descriptores del servicio,
+# no especialidades técnicas reales en documentos OSCE.
+_CARGO_META_PATTERNS = [
+    r"\bconsultor[ií]a\b",          # "Supervisor de Consultoría", etc.
+    r"^consultor\s+de\s+ingenier[ií]a$",  # "Consultor de Ingeniería" exacto
+]
+
+
+def _filtrar_meta_cargos(lista: list[dict]) -> list[dict]:
+    """
+    Descarta cargos genéricos de secciones TDR funcionales (no personal clave real).
+
+    Activa solo cuando existen Especialistas u otros cargos específicos, para
+    no filtrar en documentos donde el único cargo es genérico.
+    """
+    tiene_especializados = any(
+        re.match(
+            r"(especialista|jefe|gestor|director|coordinador|arquitecto|ingeniero)\b",
+            str(e.get("cargo", "")).strip(), re.IGNORECASE,
+        )
+        for e in lista
+        if not any(
+            re.search(p, str(e.get("cargo", "")), re.IGNORECASE)
+            for p in _CARGO_META_PATTERNS
+        )
+    )
+    if not tiene_especializados:
+        return lista
+
+    resultado = []
+    for entry in lista:
+        cargo = str(entry.get("cargo", ""))
+        if any(re.search(p, cargo, re.IGNORECASE) for p in _CARGO_META_PATTERNS):
+            logger.info(
+                f"[filtro] Descartado '{cargo}' — cargo genérico de sección funcional TDR"
+            )
+            continue
+        resultado.append(entry)
+
+    descartados = len(lista) - len(resultado)
+    if descartados:
+        logger.info(
+            f"[filtro] {descartados} cargo(s) meta-genérico(s) descartado(s)"
         )
     return resultado
 
@@ -908,6 +963,9 @@ def extraer_bases(
 
     # Filtrar "Asistentes" espurios cuando existe un "Especialista" equivalente.
     resultado["rtm_personal"] = _filtrar_asistentes(resultado["rtm_personal"])
+
+    # Filtrar cargos meta-genéricos de secciones funcionales TDR.
+    resultado["rtm_personal"] = _filtrar_meta_cargos(resultado["rtm_personal"])
 
     # Cruce personal ↔ factores: popula tiempo_adicional_factores
     resultado["rtm_personal"] = _cruzar_personal_con_factores(
