@@ -11,7 +11,7 @@ OLLAMA_BASE_URL      = "http://localhost:11434"
 QWEN_OLLAMA_BASE_URL = f"{OLLAMA_BASE_URL}/v1"
 QWEN_OLLAMA_API_KEY  = "ollama"
 QWEN_MODEL           = "qwen2.5:14b"
-QWEN_MAX_TOKENS      = 4096
+QWEN_MAX_TOKENS      = 8192
 QWEN_TIMEOUT         = 300
 
 # ── Qwen VL (lectura visual de tablas) ──────────────────────────────────────

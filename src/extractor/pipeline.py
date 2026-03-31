@@ -297,7 +297,10 @@ def _merge_deep(base: dict, nuevo: dict, base_es_vl: bool = False) -> dict:
         if isinstance(base_v, dict) and isinstance(v, dict):
             resultado[k] = _merge_deep(base_v, v, base_es_vl)
         elif isinstance(base_v, list) and isinstance(v, list):
-            if len(v) > len(base_v):
+            # Si base proviene de una tabla VL, confiar en su lista —
+            # no sobreescribir aunque la nueva sea más larga (puede haber
+            # confundido columnas adyacentes, como ocurre en tablas densas).
+            if not base_es_vl and len(v) > len(base_v):
                 resultado[k] = v
         elif _es_nulo(base_v) and not _es_nulo(v):
             resultado[k] = v
@@ -355,6 +358,16 @@ def _normalizar_cargo(cargo: str) -> str:
 
     # 1. Tomar primera alternativa de "X y/o Y y/o Z"
     base = re.split(r"\s+y/o\s+", texto, maxsplit=1)[0].strip()
+
+    # 1b. Strip "de"/"del" that connects a role word to a specialty name
+    #     "Gestor de BIM" → "Gestor BIM"
+    #     "Director del Proyecto" is also stripped, which is fine for dedup purposes.
+    #     Aplica solo a palabras de rol OSCE estándar para no alterar "Especialista en X".
+    base = re.sub(
+        r"^(Gestor|Director|Gerente|Coordinador|Jefe|L[ií]der|Supervisor"
+        r"|Responsable|Encargado|Administrador|Representante)\s+de(?:l)?\s+",
+        r"\1 ", base, flags=re.IGNORECASE,
+    )
 
     # 2. Quitar frases de acción tras el cargo base:
     #    "de elaboración del expediente técnico" → ""
@@ -498,6 +511,32 @@ def _filtrar_asistentes(lista: list[dict]) -> list[dict]:
     return resultado
 
 
+def _limpiar_anos_colegiado(valor: Any) -> Any:
+    """
+    Elimina sufijos y prefijos OSCE estándar del campo anos_colegiado.
+
+    Ejemplos:
+      "24 meses (Computada desde la fecha de la colegiatura)"
+        → "24 meses"
+      "Título profesional, 36 meses"
+        → "36 meses"
+      "48 meses (contabilizada desde la emisión del grado o título)"
+        → "48 meses"
+    """
+    if not isinstance(valor, str):
+        return valor
+    s = valor
+    # Quitar prefijo "Título profesional[,] "
+    s = re.sub(r"^[Tt][ií]tulo\s+profesional,?\s*", "", s)
+    # Quitar paréntesis que contengan términos OSCE sobre cómputo de plazos
+    s = re.sub(
+        r"\s*\([^)]*(?:colegiatura|grado\s+o\s+t[ií]tulo|t[ií]tulo\s+profesional"
+        r"|computada|contabilizada)[^)]*\)",
+        "", s, flags=re.IGNORECASE,
+    )
+    return s.strip()
+
+
 def _similarity_cargo(a: str, b: str) -> float:
     """Overlap de palabras entre dos strings de cargo normalizados."""
     words_a = set(a.split())
@@ -514,6 +553,12 @@ def _cruzar_personal_con_factores(
     """
     Popula tiempo_adicional_factores en cada cargo de rtm_personal buscando
     si existe un factor de evaluación de experiencia que lo mencione.
+
+    Estrategia en dos pasadas:
+    1. Matching específico: cargo_personal del factor coincide con algún cargo.
+    2. Fallback genérico: factores cuyo cargo_personal no coincide con ningún
+       cargo específico (ej: "Consultoría de Obra") se aplican a todos los
+       cargos que aún no tengan tiempo_adicional_factores.
     """
     factores_personal = [
         f for f in factores
@@ -522,13 +567,19 @@ def _cruzar_personal_con_factores(
     if not factores_personal:
         return personal
 
+    personal_norms = [
+        _normalizar_cargo(str(e.get("cargo", ""))) for e in personal
+    ]
+
+    # ── Pasada 1: matching específico ────────────────────────────────────
+    factores_matched: set[int] = set()
     for cargo_entry in personal:
         cargo = cargo_entry.get("cargo")
         if _es_nulo(cargo) or not _es_nulo(cargo_entry.get("tiempo_adicional_factores")):
             continue
         cargo_norm = _normalizar_cargo(str(cargo))
 
-        for factor in factores_personal:
+        for i_f, factor in enumerate(factores_personal):
             cargo_factor_norm = _normalizar_cargo(str(factor.get("cargo_personal", "")))
             if (cargo_norm == cargo_factor_norm
                     or cargo_norm in cargo_factor_norm
@@ -540,10 +591,42 @@ def _cruzar_personal_con_factores(
                     metodologia[:300] if metodologia
                     else (f"Hasta {puntaje} puntos" if puntaje else "Sí evalúa")
                 )
+                factores_matched.add(i_f)
                 logger.debug(
-                    f"[cruce] '{cargo}' → factor '{factor.get('factor')}'"
+                    f"[cruce] '{cargo}' → factor '{factor.get('factor')}' (específico)"
                 )
                 break
+
+    # ── Pasada 2: fallback genérico ───────────────────────────────────────
+    # Un factor es "genérico" si su cargo_personal no coincide con ningún
+    # cargo del personal clave con similaridad ≥ 0.5.
+    factores_genericos = [
+        factores_personal[i] for i in range(len(factores_personal))
+        if i not in factores_matched
+        and all(
+            _similarity_cargo(
+                _normalizar_cargo(str(factores_personal[i].get("cargo_personal", ""))),
+                pn,
+            ) < 0.5
+            for pn in personal_norms
+        )
+    ]
+
+    if factores_genericos:
+        factor_gen = factores_genericos[0]
+        puntaje = factor_gen.get("puntaje_maximo")
+        metodologia = factor_gen.get("metodologia", "")
+        texto_gen = (
+            metodologia[:300] if metodologia
+            else (f"Hasta {puntaje} puntos" if puntaje else "Sí evalúa")
+        )
+        for cargo_entry in personal:
+            if _es_nulo(cargo_entry.get("tiempo_adicional_factores")):
+                cargo_entry["tiempo_adicional_factores"] = texto_gen
+                logger.debug(
+                    f"[cruce] '{cargo_entry.get('cargo')}' → "
+                    f"factor genérico '{factor_gen.get('factor')}'"
+                )
 
     return personal
 
@@ -817,6 +900,11 @@ def extraer_bases(
 
     # Post-proceso: deduplicar personal y limpiar entradas vacías
     resultado["rtm_personal"] = _dedup_personal(resultado["rtm_personal"])
+
+    # Limpiar sufijos OSCE estándar en anos_colegiado
+    for entry in resultado["rtm_personal"]:
+        if not _es_nulo(entry.get("anos_colegiado")):
+            entry["anos_colegiado"] = _limpiar_anos_colegiado(entry["anos_colegiado"])
 
     # Filtrar "Asistentes" espurios cuando existe un "Especialista" equivalente.
     resultado["rtm_personal"] = _filtrar_asistentes(resultado["rtm_personal"])
