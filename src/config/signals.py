@@ -89,11 +89,30 @@ SIGNALS: dict[str, list[tuple[str, float]]] = {
         (r"entregable",                                1.5),
         (r"informe quincenal",                         1.5),
 
+        # ── Intro del concurso: descripciones genéricas del proceso ──
+        (r"oferta econ[oó]mica limitada",              2.5),
+        (r"cuant[ií]a.{0,20}contrataci[oó]n",          2.0),
+        (r"determinaci[oó]n de los l[ií]mites",         2.0),
+
+        # ── Especificaciones técnicas del TDR (no son factores de evaluación) ──
+        (r"cenepred",                                  3.0),
+        (r"cotizaciones.{0,30}firmadas",               2.0),
+        (r"reglamento nacional de edificaciones",      1.5),
+        (r"software nativo",                           1.5),
+
         # ── Anexos / formularios vacíos ──
         # Ruido: anexos tienen "personal clave" y "experiencia" en encabezados
         (r"anexo\s+n[°º]\s*\d+",                      2.5),
         (r"formato\s+n[°º]\s*\d+",                     2.5),
         (r"modelo\s+de\s+carta",                       2.0),
+        # Encabezados de tabla Anexo 10 (experiencia postor — formulario vacío)
+        (r"n[°º]\s*contrato",                          2.5),
+        (r"monto.{0,20}facturado.{0,20}acumulado",     3.0),
+        (r"fecha de(?:l)?\s+contrato",                 1.5),
+        # Encabezados de tabla Anexo 15 (personal propuesto — formulario vacío)
+        (r"nombres y apellidos",                       2.5),
+        (r"documento de identidad",                    2.0),
+        (r"universidad.{0,20}instituci[oó]n educativa", 2.0),
 
         # ── Personal NO clave ──
         # Ruido: tablas de asistentes/bachilleres disparan señales de rtm_personal
