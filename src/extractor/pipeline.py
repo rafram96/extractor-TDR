@@ -108,6 +108,11 @@ def _subdividir_bloque(block: Block) -> list[Block]:
     al LLM, mientras que las tablas B.1 (descripciones enormes de 500+
     chars por celda) se comprimen para no reventar el contexto.
     """
+    # Bloques de capacitación: no comprimir ni subdividir.
+    # Las descripciones de capacitación (>200 chars) SON los datos objetivo
+    # y _comprimir_tabla_vl las descartaría como "filas de descripción".
+    if block.block_type == "capacitacion":
+        return [block]
 
 
     # ── 1. Detectar páginas VL ANTES de cualquier compresión ────────────
@@ -408,6 +413,13 @@ def _normalizar_cargo(cargo: str) -> str:
         r"\1 ", base, flags=re.IGNORECASE,
     )
 
+    # 3. Corrección OCR conocida: VL lee "Ejecución" en vez de "Evacuación"
+    #    "Seguridad y Ejecución" no es un cargo OSCE real.
+    base = re.sub(
+        r"seguridad\s+y\s+ejecuci[oó]n",
+        "seguridad y evacuación", base, flags=re.IGNORECASE,
+    )
+
     return base.strip().lower()
 
 
@@ -549,6 +561,7 @@ _CARGO_META_PATTERNS = [
     r"\bconsultor[ií]a\b",          # "Supervisor de Consultoría", etc.
     r"^consultor\s+de\s+ingenier[ií]a$",  # "Consultor de Ingeniería" exacto
     r"^modelador\b",                # "Modelador BIM" — personal no clave
+    r"^especialidad\s*:",           # nota (*) de especialidades, no un cargo
 ]
 
 
@@ -873,6 +886,48 @@ def _merge_capacitacion(
             f"[capacitacion] 0 matches — cargos en capacitación: "
             f"{list(cap_por_cargo.keys())}"
         )
+
+    # Crear registros esqueleto para cargos que están en capacitacion
+    # pero no en rtm_personal (el LLM/VL no los extrajo de B.1/B.2).
+    cargos_presentes = {_normalizar_cargo(str(e.get("cargo", ""))) for e in personal}
+    # Excluir cargos que son meta/soporte (modelador, asistente, etc.)
+    _excluidos = _CARGO_META_PATTERNS + [r"^asistente\b"]
+
+    creados = 0
+    for key, cap in cap_por_cargo.items():
+        if key in cargos_presentes:
+            continue
+        # Verificar si el cargo está en la lista de excluidos
+        if any(re.search(p, key, re.IGNORECASE) for p in _excluidos):
+            continue
+
+        personal.append({
+            "cargo": cap.get("cargo"),
+            "profesiones_aceptadas": None,
+            "anos_colegiado": None,
+            "experiencia_minima": {
+                "cantidad": None, "unidad": None,
+                "descripcion": None, "cargos_similares_validos": None,
+                "puntaje_por_experiencia": None, "puntaje_maximo": None,
+            },
+            "tipo_obra_valido": None,
+            "tiempo_adicional_factores": None,
+            "capacitacion": {
+                "tema": cap.get("tema"),
+                "tipo": cap.get("tipo"),
+                "duracion_minima_horas": cap.get("duracion_minima_horas"),
+                "es_factor_evaluacion": False,
+            },
+            "pagina": cap.get("pagina"),
+        })
+        creados += 1
+        logger.info(
+            f"[capacitacion] Registro esqueleto creado para '{cap.get('cargo')}' "
+            f"(no encontrado en B.1/B.2)"
+        )
+
+    if creados:
+        logger.info(f"[capacitacion] {creados} registro(s) esqueleto creado(s)")
 
     return personal
 
