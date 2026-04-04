@@ -859,11 +859,8 @@ def _merge_capacitacion(
         if _es_nulo(cargo):
             continue
 
-        # Verificar si ya tiene capacitación rellena
-        cap_existente = entry.get("capacitacion", {})
-        if isinstance(cap_existente, dict) and not _es_nulo(cap_existente.get("tema")):
-            continue  # ya tiene datos, no sobreescribir
-
+        # Siempre sobreescribir: el bloque capacitacion (tabla VL dedicada)
+        # tiene datos más fiables que lo extraído del OCR garbled en rtm_personal.
         key = _normalizar_cargo(str(cargo))
         cap_match = cap_por_cargo.get(key)
         if cap_match:
