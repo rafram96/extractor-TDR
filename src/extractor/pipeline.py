@@ -389,9 +389,10 @@ def _normalizar_cargo(cargo: str) -> str:
     # 2. Quitar frases de acción tras el cargo base:
     #    "de elaboración del expediente técnico" → ""
     #    "en la elaboración de expedientes" → ""
+    #    "del expediente técnico" → ""
     #    Pero NO quitar "en Arquitectura", "en Estructuras", etc.
     base = re.sub(
-        r"\s+(?:de|en)\s+(?:la\s+)?(?:elaboración|desarrollo|supervisión|diseño)"
+        r"\s+(?:de(?:l)?|en)\s+(?:la\s+)?(?:elaboración|desarrollo|supervisión|diseño|expediente)"
         r"(?:\s+\S+)*$",
         "", base, flags=re.IGNORECASE,
     )
@@ -543,9 +544,11 @@ def _filtrar_asistentes(lista: list[dict]) -> list[dict]:
 # no del cuadro de personal clave B.1/B.2.
 # "Consultoría" y "Consultor de Ingeniería" son meta-descriptores del servicio,
 # no especialidades técnicas reales en documentos OSCE.
+# "Modelador BIM" es personal no clave (soporte técnico).
 _CARGO_META_PATTERNS = [
     r"\bconsultor[ií]a\b",          # "Supervisor de Consultoría", etc.
     r"^consultor\s+de\s+ingenier[ií]a$",  # "Consultor de Ingeniería" exacto
+    r"^modelador\b",                # "Modelador BIM" — personal no clave
 ]
 
 
@@ -603,6 +606,9 @@ def _limpiar_anos_colegiado(valor: Any) -> Any:
     if not isinstance(valor, str):
         return valor
     s = valor
+    # "N meses" es un placeholder OSCE (valor no especificado) → null
+    if re.match(r"^N\s+meses$", s.strip(), re.IGNORECASE):
+        return None
     # Quitar prefijo "Título profesional[,] "
     s = re.sub(r"^[Tt][ií]tulo\s+profesional,?\s*", "", s)
     # Quitar paréntesis que contengan términos OSCE sobre cómputo de plazos
@@ -812,6 +818,65 @@ def _guardar_debug_bloques(
     logger.info(f"[pipeline] Debug bloques guardado en {output_path}")
 
 
+def _merge_capacitacion(
+    personal: list[dict],
+    capacitaciones: list[dict],
+) -> list[dict]:
+    """
+    Cruza capacitaciones extraídas (de la sección TDR) con rtm_personal
+    (de la sección B.1/B.2) por cargo normalizado.
+
+    Solo rellena el campo 'capacitacion' si está vacío/null en rtm_personal.
+    """
+    # Indexar capacitaciones por cargo normalizado
+    cap_por_cargo: dict[str, dict] = {}
+    for cap in capacitaciones:
+        cargo = cap.get("cargo")
+        if _es_nulo(cargo):
+            continue
+        key = _normalizar_cargo(str(cargo))
+        cap_por_cargo[key] = cap
+
+    if not cap_por_cargo:
+        return personal
+
+    merges = 0
+    for entry in personal:
+        cargo = entry.get("cargo")
+        if _es_nulo(cargo):
+            continue
+
+        # Verificar si ya tiene capacitación rellena
+        cap_existente = entry.get("capacitacion", {})
+        if isinstance(cap_existente, dict) and not _es_nulo(cap_existente.get("tema")):
+            continue  # ya tiene datos, no sobreescribir
+
+        key = _normalizar_cargo(str(cargo))
+        cap_match = cap_por_cargo.get(key)
+        if cap_match:
+            entry["capacitacion"] = {
+                "tema": cap_match.get("tema"),
+                "tipo": cap_match.get("tipo"),
+                "duracion_minima_horas": cap_match.get("duracion_minima_horas"),
+                "es_factor_evaluacion": False,
+            }
+            merges += 1
+            logger.info(
+                f"[capacitacion] Merge '{cargo}' ← capacitación: "
+                f"{cap_match.get('tema', '?')} ({cap_match.get('duracion_minima_horas', '?')}h)"
+            )
+
+    if merges:
+        logger.info(f"[capacitacion] {merges} profesional(es) enriquecido(s) con capacitación")
+    else:
+        logger.warning(
+            f"[capacitacion] 0 matches — cargos en capacitación: "
+            f"{list(cap_por_cargo.keys())}"
+        )
+
+    return personal
+
+
 def extraer_bases(
     full_text: str,
     nombre_archivo: str = "",
@@ -894,6 +959,8 @@ def extraer_bases(
         "_bloques_detectados": [],
         "_tablas_stats":       vars(tablas_stats) if tablas_stats else None,
     }
+    # Almacén temporal para capacitación extraída (se cruza con rtm_personal después)
+    _capacitaciones_raw: list[dict] = []
 
     # ── Debug: guardar texto de sub-bloques para inspección ──────────────
     if output_dir:
@@ -1001,14 +1068,46 @@ def extraer_bases(
                 resultado["rtm_personal"].extend(items)
             elif block.block_type == "factores_evaluacion":
                 resultado["factores_evaluacion"].extend(data.get("factores_evaluacion", []))
+            elif block.block_type == "capacitacion":
+                _capacitaciones_raw.extend(data.get("capacitaciones", []))
 
     # Post-proceso: deduplicar personal y limpiar entradas vacías
     resultado["rtm_personal"] = _dedup_personal(resultado["rtm_personal"])
+
+    # Cruce capacitación → rtm_personal por cargo normalizado
+    if _capacitaciones_raw:
+        resultado["rtm_personal"] = _merge_capacitacion(
+            resultado["rtm_personal"], _capacitaciones_raw,
+        )
 
     # Limpiar sufijos OSCE estándar en anos_colegiado
     for entry in resultado["rtm_personal"]:
         if not _es_nulo(entry.get("anos_colegiado")):
             entry["anos_colegiado"] = _limpiar_anos_colegiado(entry["anos_colegiado"])
+
+    # Corrección de consistencia: anos_colegiado no puede superar la experiencia mínima.
+    # Si el OCR extrajo un valor mayor (ej. 48 del Jefe aplicado a un Especialista de 24),
+    # se corrige al valor de la experiencia, que es el límite lógico.
+    for entry in resultado["rtm_personal"]:
+        anos = entry.get("anos_colegiado")
+        exp_cantidad = entry.get("experiencia_minima", {}).get("cantidad")
+        if (
+            isinstance(exp_cantidad, (int, float))
+            and exp_cantidad > 0
+        ):
+            # Extraer número de anos_colegiado si es string ("48 meses" → 48)
+            if isinstance(anos, str):
+                anos_num = _extraer_numero_de_string(anos)
+            elif isinstance(anos, (int, float)):
+                anos_num = anos
+            else:
+                anos_num = None
+            if anos_num is not None and anos_num > exp_cantidad:
+                logger.info(
+                    f"[pipeline] Corrigiendo anos_colegiado de '{entry.get('cargo')}': "
+                    f"{anos_num} → {int(exp_cantidad)} (supera experiencia mínima)"
+                )
+                entry["anos_colegiado"] = int(exp_cantidad)
 
     # Filtrar "Asistentes" espurios cuando existe un "Especialista" equivalente.
     resultado["rtm_personal"] = _filtrar_asistentes(resultado["rtm_personal"])

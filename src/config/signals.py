@@ -47,7 +47,6 @@ SIGNALS: dict[str, list[tuple[str, float]]] = {
         (r"perfeccionamiento del contrato",            2.0),
         (r"disposiciones comunes",                     2.0),
         (r"adelanto directo",                          1.5),
-        # ── Nuevas señales para reducir ruido ──
         # "declaración jurada" aparece también en referencias — peso moderado
         (r"declaraci[oó]n jurada",                     1.5),
         # Señales estructurales de páginas que SON un anexo (formulario vacío)
@@ -63,6 +62,58 @@ SIGNALS: dict[str, list[tuple[str, float]]] = {
         (r"señores\s+evaluadores",                     1.5),
         (r"presente\.?-",                              1.5),
         (r"consignar seg[uú]n corresponda",            2.0),
+
+        # ── Secciones de contrato / perfeccionamiento ──
+        # Ruido: "personal clave" aparece en contexto contractual, no RTM
+        (r"postor ganador de la buena pro",            2.5),
+        (r"mesa de partes",                            2.0),
+        (r"firma.{0,10}digital",                       1.5),
+        (r"plazo.{0,20}art[ií]culo.{0,10}\d+.{0,15}reglamento", 2.0),
+        (r"suscripci[oó]n del contrato",               2.0),
+        (r"cuenta.{0,10}interbancaria",                2.0),
+
+        # ── Intro genérica del procedimiento de selección ──
+        # Ruido: "factor evaluación" aparece describiendo el proceso, no los factores
+        (r"sin precalificaci[oó]n",                    3.0),
+        (r"admisi[oó]n de.{0,20}ofertas",              2.0),
+        (r"evaluaci[oó]n de ofertas econ[oó]micas",    2.5),
+        (r"pladicop",                                  2.0),
+        (r"puntaje m[ií]nimo.{0,20}evaluaci[oó]n t[eé]cnica", 2.0),
+
+        # ── Entregables / especificaciones técnicas del TDR ──
+        # Ruido: "personal clave" aparece como entregable, no como requisito
+        (r"el consultor deber[aá]",                    2.0),
+        (r"el contratista deber[aá]",                  2.0),
+        (r"plan de trabajo",                           1.5),
+        (r"plan de ejecuci[oó]n bim",                  2.0),
+        (r"entregable",                                1.5),
+        (r"informe quincenal",                         1.5),
+
+        # ── Anexos / formularios vacíos ──
+        # Ruido: anexos tienen "personal clave" y "experiencia" en encabezados
+        (r"anexo\s+n[°º]\s*\d+",                      2.5),
+        (r"formato\s+n[°º]\s*\d+",                     2.5),
+        (r"modelo\s+de\s+carta",                       2.0),
+
+        # ── Personal NO clave ──
+        # Ruido: tablas de asistentes/bachilleres disparan señales de rtm_personal
+        (r"personal no clave",                         3.0),
+        (r"asistente\s+(?:de|en)\s+\w",                2.0),
+        (r"bachiller\s+en",                            2.0),
+        (r"contabilizada desde la emisi[oó]n del grado", 2.5),
+    ],
+
+    # ── Capacitación del personal clave ──
+    # Tabla separada (usualmente en sección A del TDR) con cursos/diplomas por cargo
+    "capacitacion": [
+        (r"capacitaci[oó]n.{0,30}personal clave",     4.0),
+        (r"capacitaci[oó]n requerida",                 3.0),
+        (r"programa y/o curso y/o diplomado",          3.0),
+        (r"especializaci[oó]n.{0,20}m[ií]n",           2.5),
+        (r"duraci[oó]n m[ií]nima.{0,20}horas",          2.5),
+        (r"horas acad[eé]micas",                        2.0),
+        (r"\d+\s*horas?\s*acad[eé]micas",               2.5),
+        (r"curso de especializaci[oó]n",                2.0),
     ],
 }
 
@@ -238,8 +289,55 @@ Extrae esta estructura. Si un campo no aparece, usa null.
 }}
 """.strip()
 
+PROMPT_CAPACITACION = """
+Eres un extractor de datos de bases de concurso público peruano (OSCE).
+Responde SOLO con JSON válido, sin explicaciones. /no_think
+
+Analiza el siguiente texto y extrae los requisitos de CAPACITACIÓN del personal clave.
+Busca la sección "Capacitación del personal clave" o tabla similar que liste qué
+cursos/diplomados/especializaciones necesita cada cargo.
+
+REGLA CRÍTICA:
+- Si el texto NO contiene requisitos de capacitación del personal clave, responde:
+  {{"capacitaciones": []}}
+- NUNCA inventes datos. Solo extrae lo que REALMENTE aparece en el texto.
+- Ignora completamente el personal NO clave (asistentes, bachilleres).
+
+ADVERTENCIA — TEXTO OCR FRAGMENTADO:
+El texto viene de OCR y puede estar fragmentado. Busca estos patrones:
+- "Programa y/o Curso y/o Diplomado" seguido de "(mín. Xh)" o "duración mínima de X horas"
+- "Especialización" seguido de horas mínimas
+- El cargo aparece CERCA del requisito de capacitación
+
+Ejemplo OCR fragmentado:
+  "Programa y/o Curso y/o Diplomado y/o Curso de
+   Especialización, con una duración mínima de 60 horas
+   Jefe de elaboración del expediente técnico
+   Gestión de Proyectos y/o Expedientes Técnicos"
+
+Extracción: cargo="Jefe de elaboración del expediente técnico",
+  tipo="Programa/Curso/Diplomado/Especialización", horas=60,
+  tema="Gestión de Proyectos, Expedientes Técnicos"
+
+TEXTO:
+{texto}
+
+{{
+  "capacitaciones": [
+    {{
+      "cargo": "nombre del cargo tal como aparece",
+      "tipo": "Programa/Curso/Diplomado o Especialización",
+      "duracion_minima_horas": número entero de horas,
+      "tema": "tema(s) de la capacitación",
+      "pagina": número de página donde aparece
+    }}
+  ]
+}}
+""".strip()
+
 PROMPTS: dict[str, str] = {
     "rtm_postor":          PROMPT_RTM_POSTOR,
     "rtm_personal":        PROMPT_RTM_PERSONAL,
     "factores_evaluacion": PROMPT_FACTORES,
+    "capacitacion":        PROMPT_CAPACITACION,
 }
